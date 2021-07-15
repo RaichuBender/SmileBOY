@@ -1,0 +1,6449 @@
+REM"
+REM'  
+REM          
+REM'         
+REM"  
+REM"
+REM"SmileBOY
+REM'GameBoy emulator for SmileBASIC 4
+REM Version ALPHA 0.2
+REM By @RaichuBender
+
+'Z80 emulator based on みうぃき's PC8801 emulator
+'heavilly modified to work with the DMG
+
+REM http://raichubender.github.io/SmileBOY
+
+
+'********************
+'* 
+'* 07/15/2021:
+'* 
+'* ALPHA 0.2
+'*  - Uploaded toGitHub
+'*  - Small tweaks here and there
+'* 
+'* 07/20/2020:
+'* 
+'* ALPHA 0.1
+'*  - Initial pre-release
+'* 
+'********************
+
+' Future plans:
+'  - Menu overhaul
+'  - Screen resize options
+'  - In-menu config options
+'  - Buttons mapable to analog
+'    stick and keyboard keys
+
+
+OPTION DEFINT
+OPTION STRICT
+CONST #version$="DMG"
+
+
+
+
+'**********
+'* Config *
+'**********
+
+
+' -- Language
+VAR lang$=LEFT$(SYSPARAM("LANG"),2) 'Syslang
+'VAR lang$="JA"  '日本語 (Japanese)
+'VAR lang$="EN"  'English
+'VAR lang$="DE"  'Deutsch (German)
+'VAR lang$="NL"  'Nederlands (Dutch)
+'VAR lang$="SU"  'Suomi (Finnish)
+'VAR lang$="ESP" 'Esperanto
+
+
+' -- Button mapping
+CONST #btn_START  = #B_RUP    'X
+CONST #btn_SELECT = #B_RLEFT  'Y
+CONST #btn_B      = #B_RDOWN  'B
+CONST #btn_A      = #B_RRIGHT 'A
+
+CONST #dir_DOWN   = #B_LDOWN
+CONST #dir_UP     = #B_LUP
+CONST #dir_LEFT   = #B_LLEFT
+CONST #dir_RIGHT  = #B_LRIGHT
+
+
+' -- Experimental
+\"Default values: 0, 1
+
+VAR use_init_state = 0
+VAR enbl_audio     = 1
+'Init state means: skip the bootrom
+'and start from a state after the bootrom
+'has been disabled (UNSTABLE)
+
+
+' -- Speed hacks
+'  - Underclock
+' Increase value(s) to speed up emulation
+' Slows down GameBoy CPU, so the
+' emulator can keep up
+' Causes bugs and freezes
+' Try it out on different games,
+' but please use with caution!
+\"Default values: 1, 1, 1, 1
+
+CONST #spd_hblank = 2
+CONST #spd_vblank = 3
+CONST #spd_OAM    = 4
+CONST #spd_VRAM   = 1
+
+'  - Timer
+' Disabling the timer will increase
+' emulation rate at the cost of games
+' that rely on it not working correctly
+\"Default values: 1, 0, 0
+\"Accurate: 1, 1, 1
+
+CONST #enbl_timer = 1 ' Sound emulation depends on this
+CONST #TAC_timer  = 0 ' Slower, but used by some games
+CONST #halt_timer = 0
+' Halt timer means: will the timer tick
+' while the CPU is in halt-mode?
+' Disabling this will increase speed
+' at the cost of accuracy.
+
+
+' -- Rom Corruptor
+\"Default values: 0, 9, 1.0
+
+CONST #use_rom_corruptor = 0
+CONST #corruptor_seed    = 9
+CONST #corruption_factor = 1.0
+
+  
+' -- Border color
+\"Default values: #C_BLACK
+
+CONST #border_color = #C_BLACK
+
+
+' -- DMG color palette
+\"Default values: 0, Nature
+
+CONST #invert_colors = 0
+
+' - Custom:
+'CONST #p_bl = 
+'CONST #p_dg = 
+'CONST #p_lg = 
+'CONST #p_wh = 
+
+' - Nature:
+CONST #p_bl=&H00001F,#p_dg=&H1F1FDF,#p_lg=&H7FFF3F,#p_wh=&HEFFFFF
+' - Ocean:
+'CONST #p_bl=&H000000,#p_dg=&H1F1FDF,#p_lg=&H3F7FFF,#p_wh=&HFFFFFF
+' - Pastel:
+'CONST #p_bl=#C_BLACK,#p_dg=&H4F4FAF,#p_lg=&HDF7FFF,#p_wh=#C_WHITE
+' - Spaghetti with cheese:
+'CONST #p_bl=&H000000,#p_dg=&HFF0000,#p_lg=&HFFFF00,#p_wh=&HFFFFFF
+' - Strawberry:
+'CONST #p_bl=&H000000,#p_dg=&H9F0000,#p_lg=&HFF00FF,#p_wh=&HFFFFFF
+' - Teal:
+'CONST #p_bl=&H000000,#p_dg=&H555555 AND #C_BLUE,#p_lg=&HAAAAAA AND #C_AQUA,#p_wh=&HFFFFFF
+' - Clown vomit:
+'CONST #p_bl=#C_BLUE,#p_dg=#C_RED,#p_lg=#C_MAGENTA,#p_wh=#C_YELLOW
+' - Birthday cake:
+'CONST #p_bl=#C_BLUE,#p_dg=#C_RED,#p_lg=#C_MAGENTA OR &H7F7F7F,#p_wh=#C_YELLOW OR &HEFEFEF
+' - LCD Green-ish:
+'CONST #p_bl=&H3F3F3F,#p_dg=&H4F5F4F,#p_lg=&H5F6F5F,#p_wh=&H6F7F6F
+' - LCD Blue-ish:
+'CONST #p_bl=&H3F3F3F,#p_dg=&H4F4F5F,#p_lg=&H5F5F6F,#p_wh=&H6F6F7F
+' - LCD Red-ish:
+'CONST #p_bl=&H3F3F3F,#p_dg=&H5F4F4F,#p_lg=&H6F5F5F,#p_wh=&H7F6F6F
+' - LCD Hue:
+'CONST #p_bl=&H3F3F3F,#p_dg=&H4F4F5F,#p_lg=&H5F6F6F,#p_wh=&H6F7F6F
+' - GB light (blue):
+'CONST #p_bl=&H071F3F,#p_dg=&H0F3F7F,#p_lg=&H175FAF,#p_wh=&H1F7FFF
+' - GB light (green):
+'CONST #p_bl=&H1F3F07,#p_dg=&H3F7F0F,#p_lg=&H5FAF17,#p_wh=&H7FFF1F
+' - GB light (purple):
+'CONST #p_bl=&H1F073F,#p_dg=&H3F0F7F,#p_lg=&H5F17AF,#p_wh=&H7F1FFF
+' - GameBoy DMG:
+'CONST #p_bl=&H1F4F1F,#p_dg=&H1F5F2F,#p_lg=&H4F7F1F,#p_wh=&H7F8F0F
+' - GameBoy DMG (bright):
+'CONST #p_bl=&H1F3F4F,#p_dg=&H5FAF3F,#p_lg=&H9FDF2F,#p_wh=&HDFFF1F
+' - Monochrome:
+'CONST #p_bl=&H000000,#p_dg=&H555555,#p_lg=&HAAAAAA,#p_wh=&HFFFFFF
+' - 1 bit:
+'CONST #p_bl=&H000000,#p_dg=&H000000,#p_lg=&HFFFFFF,#p_wh=&HFFFFFF
+' - CGA #0:
+'CONST #p_bl=#C_BLACK,#p_dg=#C_MAGENTA,#p_lg=#C_CYAN,#p_wh=#C_WHITE
+' - CGA #2:
+'CONST #p_bl=#C_BLACK,#p_dg=#C_RED,#p_lg=#C_LIME,#p_wh=#C_YELLOW
+
+' - GAME SPECIFIC -
+
+' - PKMN Yellow:
+'CONST #p_bl=&H1F3FBF,#p_dg=&HFF0000,#p_lg=&HFFFF00,#p_wh=&HEFFFFF
+' - PKMN Gold:
+'CONST #p_bl=&H5F1747,#p_dg=&H9F5F3F,#p_lg=&HFFCF3F,#p_wh=&HEFFFFF
+
+
+
+
+
+
+
+
+'Unfinished
+'!!!DO NOT CHANGE!!!
+' -- Screen scale
+\"Default values: 4
+
+CONST #scale = 4
+
+
+
+
+DIM pal[] = \
+[ \
+  &HFF000000 OR  #p_bl,\
+  &HFF000000 OR  #p_dg,\
+  &HFF000000 OR  #p_lg,\
+  &H00FFFFFF AND #p_wh \
+]
+
+IF #invert_colors \
+THEN
+
+  DIM pal_inv[] = \
+  [ \
+    &HFF000000OR pal[3], \
+    &HFF000000OR pal[2], \
+    &HFF000000OR pal[1], \
+    &H00FFFFFF AND pal[0] \
+  ]
+
+  pal = pal_inv
+
+ENDIF
+
+'Temporary variables:
+VAR tmp, tmp2
+VAR I,   J,   K
+
+'Screen and layer constants:
+CONST #bg_screen  = 1
+CONST #win_screen = 0
+
+CONST #bg_layer   = 6
+CONST #win_layer  = 5
+CONST #sp_layer   = 4
+
+ENUM \
+  #ROM,  \
+  #PROJ, \
+  #SAV,  \
+  #ST
+
+VAR romfile$, proj$
+
+select #ROM OUT romfile$,proj$
+
+
+
+
+'**************************
+'* Memory
+'**************************
+
+
+'*** Internal ***
+
+DIM MEM[&H10000]
+DIM MEM2[0]             'Temporary, for moving chunks of memory around
+
+
+'*** Cartridge ***
+
+' -- ROM --
+VAR ROM_size
+VAR ROM_banks
+VAR ROM_last_bank
+DIM ROM[0]              'Raw ROM as read from file
+DIM ROM_dirty[0]        'Dirty copy; 8 bits per elements instead of 32
+
+VAR use_BOOTROM = #TRUE
+DIM BOOTROM[&H100]
+
+VAR ROM_bank = 1
+VAR prev_ROM_bank = 1
+
+VAR ROM_loaded
+VAR cart_type
+VAR MBC_type
+VAR has_eram
+VAR has_battery
+VAR has_RTC
+VAR RTC_sel
+
+' -- External RAM --
+VAR ERAM_bank = 0
+VAR prev_ERAM_bank = 0
+
+VAR ERAM_size
+VAR ERAM_banks
+VAR ERAM_last_bank
+DIM ERAM[&H2000]
+
+VAR ERAM_enbl = 0
+VAR ERAM_mode = 0
+
+' -- IO registers --
+ENUM \
+  #P1   = &HFF00,  #SB   = &HFF01, \
+  #SC   = &HFF02,  #DIV  = &HFF04, \
+  #TIMA = &HFF05,  #TMA  = &HFF06, \
+  #TAC  = &HFF07,  #IF   = &HFF0F, \
+  #NR10 = &HFF10,  #NR11 = &HFF11, \
+  #NR12 = &HFF12,  #NR13 = &HFF13, \
+  #NR14 = &HFF14,  #NR21 = &HFF16, \
+  #NR22 = &HFF17,  #NR23 = &HFF18, \
+  #NR24 = &HFF19,  #NR30 = &HFF1A, \
+  #NR31 = &HFF1B,  #NR32 = &HFF1C, \
+  #NR33 = &HFF1D,  #NR34 = &HFF1E, \
+  #NR41 = &HFF20,  #NR42 = &HFF21, \
+  #NR43 = &HFF22,  #NR44 = &HFF23, \
+  #NR50 = &HFF24,  #NR51 = &HFF25, \
+  #NR52 = &HFF26,  \'Wave Pattern RAM (0xFF30 - 0xFF3F)
+  #LCDC = &HFF40,  #STAT = &HFF41, \
+  #SCY  = &HFF42,  #SCX  = &HFF43, \
+  #LY   = &HFF44,  #LYC  = &HFF45, \
+  #DMA  = &HFF46,  #BGP  = &HFF47, \
+  #OBP0 = &HFF48,  #OBP1 = &HFF49, \
+  #WY   = &HFF4A,  #WX   = &HFF4B, \
+  #IE   = &HFFFF
+
+DIM wav_ptrn_ram_table[] = \
+[\
+  &HFF30,  &HFF31, \
+  &HFF32,  &HFF33, \
+  &HFF34,  &HFF35, \
+  &HFF36,  &HFF37, \
+  &HFF38,  &HFF39, \
+  &HFF3A,  &HFF3B, \
+  &HFF3C,  &HFF3D, \
+  &HFF3E,  &HFF3F  \
+]
+
+
+ENUM \
+  #intr_PPU_vblank = &B00000001,\
+  #intr_LCD_STAT   = &B00000010,\
+  #intr_timer      = &B00000100,\
+  #intr_serial     = &B00001000,\
+  #intr_joypad     = &B00010000
+
+ENUM\
+  #intr_PPU_vblank_offs = &H40,\
+  #intr_LCD_STAT_offs   = &H48,\
+  #intr_timer_offs      = &H50,\
+  #intr_serial_offs     = &H58,\
+  #intr_joypad_offs     = &H60
+
+'**********************************
+'* --- Audio Proc. Unit (APU) --- *
+'**********************************
+VAR wav_ram$="FF00FF00FF00FF00FF00FF00FF00FF00"*2
+DIM wav_duty$[] = [\
+  "FF00000000000000",\
+  "FFFF000000000000",\
+  "FFFFFFFF00000000",\
+  "FFFFFFFFFFFF0000" \
+]
+
+VAR apu_pwr=1                  'Is APU active?
+
+VAR    t1,    t2,    t3,    t4 'Note triggered
+VAR    f1,    f2,    f3        'GB frequency
+VAR   d1$,   d2$,          d4$ 'Duty
+VAR  fi1#,  fi2#,  fi3#,  fi4# 'Attack
+VAR dir1#, dir2#,        dir4# 'Env direction
+VAR  fv1#,  fv2#,   fv3,  fv4# 'Env init vol
+VAR  lP1#,  lP2#,  lP3#,  lP4# 'Length proxy
+VAR   l1#,   l2#,   l3#,   l4# 'Length
+VAR   ti1,   ti2,   ti3,   ti4 'Playback pos
+VAR   le1,   le2,   le3,   le4 'Length Enbl
+VAR   vl#,   vr#,    v3        'Volume
+
+DIM envU#[256]                 'ENV slopes up
+DIM envD#[256]                 'ENV slopes down
+DIM inv#[256]                  'Initial volumes
+
+VAR  von3 = 1                  'Is wave channel active?
+
+'DIM wvol[] = [0,5,3,1]
+DIM wvol[] = [0,4,2,1]         'ch3 volumes
+DIM vlv#[256],vrv#[256]        'Left/Right volumes
+VAR   v1l,   v1r               'ch1 stereo volume
+VAR   v2l,   v2r               'ch2 stereo volume
+VAR   v3l,   v3r               'ch3 stereo volume
+VAR   v4l,   v4r               'ch4 stereo volume
+
+
+DIM pitches#[2048]
+
+
+'**********************************
+'*    --- DMG CPU Emulator ---    *
+'**********************************
+VAR DMG_F,  DMG_A
+VAR DMG_B,  DMG_C
+VAR DMG_D,  DMG_E
+VAR DMG_H,  DMG_L
+VAR DMG_PC, DMG_SP
+VAR DMG_INTF, pending_IRQ
+VAR DMG_HALT
+VAR DMG_state0
+
+DIM state_table[256]
+DIM state_CB_table[256]
+
+DIM DAA_table[2048]
+
+'Bitshift tables
+DIM SWAP_table[256]
+DIM RLC_table[256],RRC_table[256]
+DIM RL_NC_table[256],RL_C_table[256]
+DIM RR_NC_table[256],RR_C_table[256]
+DIM SLA_table[256],SRA_table[256]
+DIM SLL_table[256],SRL_table[256]
+DIM BIT7_table[256],BIT6_table[256]
+DIM BIT5_table[256],BIT4_table[256]
+DIM BIT3_table[256],BIT2_table[256]
+DIM BIT1_table[256],BIT0_table[256]
+DIM SET7_table[256],SET6_table[256]
+DIM SET5_table[256],SET4_table[256]
+DIM SET3_table[256],SET2_table[256]
+DIM SET1_table[256],SET0_table[256]
+DIM RES7_table[256],RES6_table[256]
+DIM RES5_table[256],RES4_table[256]
+DIM RES3_table[256],RES2_table[256]
+DIM RES1_table[256],RES0_table[256]
+
+DIM JOYP0[256]
+DIM JOYP1[256]
+
+' Flag tables
+DIM Z_table[256], 
+DIM SUB_table[65536]
+DIM ADD_table[65536]
+DIM ADC_table[65536]
+DIM SBC_table[65536]
+DIM INC_table[256]
+DIM DEC_table[256]
+
+DIM SGN8_table[256]
+DIM SGN8M_table[256]
+DIM SGN16_table[65536]
+
+DIM Instruction$[256]
+DIM Instruction_type[256]
+
+DIM Instruction_CB$[256]
+DIM Instruction_CB_type[256]
+
+
+DIM pow4[] = [64, 1, 4, 16]
+
+VAR BG_win_tile_data = 1
+VAR BG_tile_map      = 0
+VAR win_tile_map     = 0
+VAR sprite_size_16   = 0
+
+VAR BG_on,win_on
+
+DIM BG_line_ofs#[180,4]
+DIM win_line_ofs#[180,4]
+
+DIM line_ofs_table_x#[256]
+DIM line_ofs_table_y#[256]
+
+
+'GameBoy Camera
+VAR cam_regs_on
+DIM cam_reg[6]
+
+
+'DMA_OAM_update
+VAR sprNo
+DIM div_4[0]
+VAR addr3
+VAR No
+DIM u_val[0]
+DIM v_val[0]
+DIM y_flp_val[0]
+DIM x_flp_val[0]
+VAR u
+VAR v
+VAR atr
+VAR y_flp
+VAR x_flp
+
+'VRAM_render_tilemap0
+DIM tile0_cache[&H820]
+DIM tile1_cache[&H820]
+VAR ofs
+
+'VRAM_update_tile
+DIM VRAM_cache[&H8000]
+DIM VRAM_gfx[0]
+VAR VRAM_tileupdate
+VAR VRAM_put0
+VAR VRAM_put1
+DIM VRAM_bg[0]
+DIM VRAM_win[0]
+DIM _sx[] = [&H80,&H40,&H20,&H10,8,4,2,1]
+VAR tile,d0,d1
+VAR y
+VAR x,sx
+VAR tx,ty
+DIM _addr[&HA000]
+DIM _tile[&HA000]
+DIM _ty[&HA000]
+DIM _d0[&HA000]
+DIM _d1[&HA000]
+
+
+'PPU
+VAR PPU_on
+
+VAR tilemap0$,tilemap1$
+
+DIM PPU_tileset[512,8,8]
+
+FILL PPU_tileset,3
+
+ENUM \
+  #line_time_OAM    = 80,  \
+  #line_time_VRAM   = 172, \
+  #line_time_hblank = 204, \
+  #line_time_vblank = 456
+
+DIM line_time[] = \
+[\
+  #line_time_hblank DIV #spd_hblank, \
+  #line_time_vblank DIV #spd_vblank, \
+  #line_time_OAM    DIV #spd_OAM,    \
+  #line_time_VRAM   DIV #spd_VRAM    \
+]
+
+ENUM \
+  #PPU_mode_OAM    = 2,\
+  #PPU_mode_VRAM   = 3,\
+  #PPU_mode_hblank = 0,\
+  #PPU_mode_vblank = 1
+
+
+VAR last_cycles = 0, \
+    PPU_cycles,      \
+    PPU_mode' = #PPU_mode_OAM
+
+  VAR FPS 'TMP
+  VAR OLDMS = MILLISEC() DIV 1000
+'CONST #FRAM  = 16446*60
+'CONST #FRAM  = 16719*60
+CONST #FRAM  = 16663.7*60
+
+DIM OBJ[40]
+DIM OBJ_coord[40]
+
+DIM OAM_val[40,3]
+
+DIM CHR_map$[&H2800]
+
+
+'Timing
+VAR clock_div
+VAR clock_main
+VAR clock_sub
+VAR trs
+
+
+' Real-time clock: HH:MM:SS + Day of year
+VAR rtc_h, rtc_m, rtc_s
+VAR rtc_date_lo, rtc_date_hi
+
+' Latched RTC
+VAR rtc_lh, rtc_lm, rtc_ls
+VAR rtc_ldate_lo, rtc_ldate_hi
+
+
+VAR reg1h
+VAR reg2h
+VAR reg1l
+VAR reg2l
+VAR J0, J1
+
+
+@Instruction_DATA
+DATA 0, " NOP",            2, " LD    BC,%04XH"
+DATA 0, " LD    (BC),A",   0, " INC   BC"
+DATA 0, " INC   B",        0, " DEC   B"
+DATA 1, " LD    B,%02XH",  0, " RLCA  "
+DATA 2, " LD    %04XH,SP", 0, " ADD   HL,BC"
+DATA 0, " LD    A,(BC)",   0, " DEC   BC"
+DATA 0, " INC   C",        0, " DEC   C"
+DATA 1, " LD    C,%02XH",  0, " RRCA  "
+
+DATA 1, " STOP  %02XH",    2, " LD    DE,%04XH"
+DATA 0, " LD    (DE),A",   0, " INC   DE"
+DATA 0, " INC   D",        0, " DEC   D"
+DATA 1, " LD    D,%02XH",  0, " RLA   "
+DATA 3, " JR    %04XH",    0, " ADD   HL,DE"
+DATA 0, " LD    A,(DE)",   0, " DEC   DE"
+DATA 0, " INC   E",        0, " DEC   E"
+DATA 1, " LD    E,%02XH",  0, " RRA   "
+
+DATA 3, " JR    NZ,%04XH", 2, " LD    HL,%04XH"
+DATA 0, " LD    (HL+),A",  0, " INC   HL"
+DATA 0, " INC   H",        0, " DEC   H"
+DATA 1, " LD    H,%02XH",  0, " DAA   "
+DATA 3, " JR    Z,%04XH",  0, " ADD   HL,HL"
+DATA 0, " LD    A,(HL+)",  0, " DEC   HL"
+DATA 0, " INC   L",        0, " DEC   L"
+DATA 1, " LD    L,%02XH",  0, " CPL"
+
+DATA 3, " JR    NC,%04XH", 2, " LD    SP,%04XH"
+DATA 0, " LD    (HL-),A",  0, " INC   SP"
+DATA 0, " INC   (HL)",     0, " DEC   (HL)"
+DATA 1, " LD    (HL),%02XH",0," SCF   "
+DATA 3, " JR    C,%04XH",  0, " ADD   HL,SP"
+DATA 0, " LD    A,(HL-)",  0, " DEC   SP"
+DATA 0, " INC   A",        0, " DEC   A"
+DATA 1, " LD    A,%02XH",  0, " CCF"
+
+DATA 0, " LD    B,B",   0, " LD    B,C"
+DATA 0, " LD    B,D",   0, " LD    B,E"
+DATA 0, " LD    B,H",   0, " LD    B,L"
+DATA 0, " LD    B,(HL)",0, " LD    B,A"
+DATA 0, " LD    C,B",   0, " LD    C,C"
+DATA 0, " LD    C,D",   0, " LD    C,E"
+DATA 0, " LD    C,H",   0, " LD    C,L"
+DATA 0, " LD    C,(HL)",0, " LD    C,A"
+
+DATA 0, " LD    D,B",   0, " LD    D,C"
+DATA 0, " LD    D,D",   0, " LD    D,E"
+DATA 0, " LD    D,H",   0, " LD    D,L"
+DATA 0, " LD    D,(HL)",0, " LD    D,A"
+DATA 0, " LD    E,B",   0, " LD    E,C"
+DATA 0, " LD    E,D",   0, " LD    E,E"
+DATA 0, " LD    E,H",   0, " LD    E,L"
+DATA 0, " LD    E,(HL)",0, " LD    E,A"
+
+DATA 0, " LD    H,B",   0, " LD    H,C"
+DATA 0, " LD    H,D",   0, " LD    H,E"
+DATA 0, " LD    H,H",   0, " LD    H,L"
+DATA 0, " LD    H,(HL)",0, " LD    H,A"
+DATA 0, " LD    L,B",   0, " LD    L,C"
+DATA 0, " LD    L,D",   0, " LD    L,E"
+DATA 0, " LD    L,H",   0, " LD    L,L"
+DATA 0, " LD    L,(HL)",0, " LD    L,A"
+
+DATA 0, " LD    (HL),B",0, " LD    (HL),C"
+DATA 0, " LD    (HL),D",0, " LD    (HL),E"
+DATA 0, " LD    (HL),H",0, " LD    (HL),L"
+DATA 0, " HALT  ",      0, " LD    (HL),A"
+DATA 0, " LD    A,B",   0, " LD    A,C"
+DATA 0, " LD    A,D",   0, " LD    A,E"
+DATA 0, " LD    A,H",   0, " LD    A,L"
+DATA 0, " LD    A,(HL)",0, " LD    A,A"
+
+DATA 0, " ADD   A,B",   0, " ADD   A,C"
+DATA 0, " ADD   A,D",   0, " ADD   A,E"
+DATA 0, " ADD   A,H",   0, " ADD   A,L"
+DATA 0, " ADD   A,(HL)",0, " ADD   A,A"
+DATA 0, " ADC   A,B",   0, " ADC   A,C"
+DATA 0, " ADC   A,D",   0, " ADC   A,E"
+DATA 0, " ADC   A,H",   0, " ADC   A,L"
+DATA 0, " ADC   A,(HL)",0, " ADC   A,A"
+
+DATA 0, " SUB   B",     0, " SUB   C"
+DATA 0, " SUB   D",     0, " SUB   E"
+DATA 0, " SUB   H",     0, " SUB   L"
+DATA 0, " SUB   (HL)",  0, " SUB   A"
+DATA 0, " SBC   A,B",   0, " SBC   A,C"
+DATA 0, " SBC   A,D",   0, " SBC   A,E"
+DATA 0, " SBC   A,H",   0, " SBC   A,L"
+DATA 0, " SBC   A,(HL)",0, " SBC   A,A"
+
+DATA 0, " AND   B",     0, " AND   C"
+DATA 0, " AND   D",     0, " AND   E"
+DATA 0, " AND   H",     0, " AND   L"
+DATA 0, " AND   (HL)",  0, " AND   A"
+DATA 0, " XOR   B",     0, " XOR   C"
+DATA 0, " XOR   D",     0, " XOR   E"
+DATA 0, " XOR   H",     0, " XOR   L"
+DATA 0, " XOR   (HL)",  0, " XOR   A"
+
+DATA 0, " OR    B",     0, " OR    C"
+DATA 0, " OR    D",     0, " OR    E"
+DATA 0, " OR    H",     0, " OR    L"
+DATA 0, " OR    (HL)",  0, " OR    A"
+DATA 0, " CP    B",     0, " CP    C"
+DATA 0, " CP    D",     0, " CP    E"
+DATA 0, " CP    H",     0, " CP    L"
+DATA 0, " CP    (HL)",  0, " CP    A"
+
+DATA 0, " RET   NZ",      0, " POP   BC"
+DATA 2, " JP    NZ,%04XH",2, " JP    %04XH"
+DATA 2, " CALL  NZ,%04XH",0, " PUSH  BC"
+DATA 1, " ADD   A,%02XH", 0, " RST   00H"
+DATA 0, " RET   Z",       0, " RET   "
+DATA 2, " JP    Z,%04XH", 4, ""    
+DATA 2, " CALL  Z,%04XH", 2, " CALL  %04XH"
+DATA 1, " ADC   A,%02XH", 0, " RST   08H"
+
+DATA 0, " RET   NC",      0, " POP   DE"
+DATA 2, " JP    NC,%04XH",1, " OUT   (%02XH),A"
+DATA 2, " CALL  NC,%04XH",0, " PUSH  DE"
+DATA 1, " SUB   %02XH",   0, " RST   10H"
+DATA 0, " RET   C",       0, " RETI  "
+DATA 2, " JP    C,%04XH", 1, " IN    A,(%02XH)"
+DATA 2, " CALL  C,%04XH", 4, ""
+DATA 1, " SBC   A,%02XH", 0, " RST   18H"
+
+DATA 1, " LD    (FF%02XH),A",0, " POP   HL"
+DATA 0, " LD    (FF_CH),A",0," EX    HL,(SP)"
+DATA 2, " CALL  PO,%04XH",0, " PUSH  HL"
+DATA 1, " AND   %02XH",   0, " RST   20H"
+DATA 5, " ADD   SP,%04XH",0, " JP    (HL)"
+DATA 2, " LD    (%04XH),A",0," EX    DE,HL"
+DATA 2, " CALL  PE,%04XH",4, ""
+DATA 1, " XOR   %02XH",   0, " RST   28H"
+
+DATA 1, " LD    A,(FF%02XH)",0," POP   AF"
+DATA 0, " LD    A,(FF_CH)",0," DI    "
+DATA 2, " CALL  P,%04XH", 0, " PUSH  AF"
+DATA 1, " OR    %02XH",   0, " RST   30H"
+DATA 0, " RET   M",       0, " LD    SP,HL"
+DATA 2, " LD    A,%04XH", 0, " EI    "
+DATA 2, " CALL  M,%04XH", 4, ""    
+DATA 1, " CP    %02XH",   0, " RST   38H"
+
+
+@Instruction_CB_DATA
+DATA 0, " RLC   B",    0, " RLC   C"
+DATA 0, " RLC   D",    0, " RLC   E"
+DATA 0, " RLC   H",    0, " RLC   L"
+DATA 0, " RLC   (HL)", 0, " RLC   A"
+DATA 0, " RRC   B",    0, " RRC   C"
+DATA 0, " RRC   D",    0, " RRC   E"
+DATA 0, " RRC   H",    0, " RRC   L"
+DATA 0, " RRC   (HL)", 0, " RRC   A"
+
+DATA 0, " RL    B",    0, " RL    C"
+DATA 0, " RL    D",    0, " RL    E"
+DATA 0, " RL    H",    0, " RL    L"
+DATA 0, " RL    (HL)", 0, " RL    A"
+DATA 0, " RR    B",    0, " RR    C"
+DATA 0, " RR    D",    0, " RR    E"
+DATA 0, " RR    H",    0, " RR    L"
+DATA 0, " RR    (HL)", 0, " RR    A"
+
+DATA 0, " SLA   B",    0, " SLA   C"
+DATA 0, " SLA   D",    0, " SLA   E"
+DATA 0, " SLA   H",    0, " SLA   L"
+DATA 0, " SLA   (HL)", 0, " SLA   A"
+DATA 0, " SRA   B",    0, " SRA   C"
+DATA 0, " SRA   D",    0, " SRA   E"
+DATA 0, " SRA   H",    0, " SRA   L"
+DATA 0, " SRA   (HL)", 0, " SRA   A"
+
+DATA 0, " SWAP  B",    0, " SWAP  C"
+DATA 0, " SWAP  D",    0, " SWAP  E"
+DATA 0, " SWAP  H",    0, " SWAP  L"
+DATA 0, " SWAP  (HL)", 0, " SWAP  A"
+DATA 0, " SRL   B",    0, " SRL   C"
+DATA 0, " SRL   D",    0, " SRL   E"
+DATA 0, " SRL   H",    0, " SRL   L"
+DATA 0, " SRL   (HL)", 0, " SRL   A"
+
+DATA 0, " BIT   0,B",  0, " BIT   0,C"
+DATA 0, " BIT   0,D",  0, " BIT   0,E"
+DATA 0, " BIT   0,H",  0, " BIT   0,L"
+DATA 0, " BIT   0,(HL)", 0, " BIT   0,A"
+DATA 0, " BIT   1,B",  0, " BIT   1,C"
+DATA 0, " BIT   1,D",  0, " BIT   1,E"
+DATA 0, " BIT   1,H",  0, " BIT   1,L"
+DATA 0, " BIT   1,(HL)", 0, " BIT   1,A"
+
+DATA 0, " BIT   2,B",  0, " BIT   2,C"
+DATA 0, " BIT   2,D",  0, " BIT   2,E"
+DATA 0, " BIT   2,H",  0, " BIT   2,L"
+DATA 0, " BIT   2,(HL)", 0, " BIT   2,A"
+DATA 0, " BIT   3,B",  0, " BIT   3,C"
+DATA 0, " BIT   3,D",  0, " BIT   3,E"
+DATA 0, " BIT   3,H",  0, " BIT   3,L"
+DATA 0, " BIT   3,(HL)", 0, " BIT   3,A"
+
+DATA 0, " BIT   4,B",  0, " BIT   4,C"
+DATA 0, " BIT   4,D",  0, " BIT   4,E"
+DATA 0, " BIT   4,H",  0, " BIT   4,L"
+DATA 0, " BIT   4,(HL)", 0, " BIT   4,A"
+DATA 0, " BIT   5,B",  0, " BIT   5,C"
+DATA 0, " BIT   5,D",  0, " BIT   5,E"
+DATA 0, " BIT   5,H",  0, " BIT   5,L"
+DATA 0, " BIT   5,(HL)", 0, " BIT   5,A"
+
+DATA 0, " BIT   6,B",  0, " BIT   6,C"
+DATA 0, " BIT   6,D",  0, " BIT   6,E"
+DATA 0, " BIT   6,H",  0, " BIT   6,L"
+DATA 0, " BIT   6,(HL)", 0, " BIT   6,A"
+DATA 0, " BIT   7,B",  0, " BIT   7,C"
+DATA 0, " BIT   7,D",  0, " BIT   7,E"
+DATA 0, " BIT   7,H",  0, " BIT   7,L"
+DATA 0, " BIT   7,(HL)", 0, " BIT   7,A"
+
+DATA 0, " RES   0,B",  0, " RES   0,C"
+DATA 0, " RES   0,D",  0, " RES   0,E"
+DATA 0, " RES   0,H",  0, " RES   0,L"
+DATA 0, " RES   0,(HL)", 0, " RES   0,A"
+DATA 0, " RES   1,B",  0, " RES   1,C"
+DATA 0, " RES   1,D",  0, " RES   1,E"
+DATA 0, " RES   1,H",  0, " RES   1,L"
+DATA 0, " RES   1,(HL)", 0, " RES   1,A"
+
+DATA 0, " RES   2,B",  0, " RES   2,C"
+DATA 0, " RES   2,D",  0, " RES   2,E"
+DATA 0, " RES   2,H",  0, " RES   2,L"
+DATA 0, " RES   2,(HL)", 0, " RES   2,A"
+DATA 0, " RES   3,B",  0, " RES   3,C"
+DATA 0, " RES   3,D",  0, " RES   3,E"
+DATA 0, " RES   3,H",  0, " RES   3,L"
+DATA 0, " RES   3,(HL)", 0, " RES   3,A"
+
+DATA 0, " RES   4,B",  0, " RES   4,C"
+DATA 0, " RES   4,D",  0, " RES   4,E"
+DATA 0, " RES   4,H",  0, " RES   4,L"
+DATA 0, " RES   4,(HL)", 0, " RES   4,A"
+DATA 0, " RES   5,B",  0, " RES   5,C"
+DATA 0, " RES   5,D",  0, " RES   5,E"
+DATA 0, " RES   5,H",  0, " RES   5,L"
+DATA 0, " RES   5,(HL)", 0, " RES   5,A"
+
+DATA 0, " RES   6,B",  0, " RES   6,C"
+DATA 0, " RES   6,D",  0, " RES   6,E"
+DATA 0, " RES   6,H",  0, " RES   6,L"
+DATA 0, " RES   6,(HL)", 0, " RES   6,A"
+DATA 0, " RES   7,B",  0, " RES   7,C"
+DATA 0, " RES   7,D",  0, " RES   7,E"
+DATA 0, " RES   7,H",  0, " RES   7,L"
+DATA 0, " RES   7,(HL)", 0, " RES   7,A"
+
+DATA 0, " SET   0,B",  0, " SET   0,C"
+DATA 0, " SET   0,D",  0, " SET   0,E"
+DATA 0, " SET   0,H",  0, " SET   0,L"
+DATA 0, " SET   0,(HL)", 0, " SET   0,A"
+DATA 0, " SET   1,B",  0, " SET   1,C"
+DATA 0, " SET   1,D",  0, " SET   1,E"
+DATA 0, " SET   1,H",  0, " SET   1,L"
+DATA 0, " SET   1,(HL)", 0, " SET   1,A"
+
+DATA 0, " SET   2,B",  0, " SET   2,C"
+DATA 0, " SET   2,D",  0, " SET   2,E"
+DATA 0, " SET   2,H",  0, " SET   2,L"
+DATA 0, " SET   2,(HL)", 0, " SET   2,A"
+DATA 0, " SET   3,B",  0, " SET   3,C"
+DATA 0, " SET   3,D",  0, " SET   3,E"
+DATA 0, " SET   3,H",  0, " SET   3,L"
+DATA 0, " SET   3,(HL)", 0, " SET   3,A"
+
+DATA 0, " SET   4,B",  0, " SET   4,C"
+DATA 0, " SET   4,D",  0, " SET   4,E"
+DATA 0, " SET   4,H",  0, " SET   4,L"
+DATA 0, " SET   4,(HL)", 0, " SET   4,A"
+DATA 0, " SET   5,B",  0, " SET   5,C"
+DATA 0, " SET   5,D",  0, " SET   5,E"
+DATA 0, " SET   5,H",  0, " SET   5,L"
+DATA 0, " SET   5,(HL)", 0, " SET   5,A"
+
+DATA 0, " SET   6,B",  0, " SET   6,C"
+DATA 0, " SET   6,D",  0, " SET   6,E"
+DATA 0, " SET   6,H",  0, " SET   6,L"
+DATA 0, " SET   6,(HL)", 0, " SET   6,A"
+DATA 0, " SET   7,B",  0, " SET   7,C"
+DATA 0, " SET   7,D",  0, " SET   7,E"
+DATA 0, " SET   7,H",  0, " SET   7,L"
+DATA 0, " SET   7,(HL)", 0, " SET   7,A"
+
+
+@Z_table_DATA
+DATA 128,0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+DATA  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+
+@state_table_DATA
+DATA  4,12, 8, 8, 4, 4, 8, 4,20, 8, 8, 8, 4, 4, 8, 4
+DATA  4,12, 8, 8, 4, 4, 8, 4,12, 8, 8, 8, 4, 4, 8, 4
+DATA  8,12, 8, 8, 4, 4, 8, 4, 8, 8, 8, 8, 4, 4, 8, 4
+DATA  8,12, 8, 8,12,12,12, 4, 8, 8, 8, 8, 4, 4, 8, 4
+DATA  4, 4, 4, 4, 4, 4, 8, 4, 4, 4, 4, 4, 4, 4, 8, 4
+DATA  4, 4, 4, 4, 4, 4, 8, 4, 4, 4, 4, 4, 4, 4, 8, 4
+DATA  4, 4, 4, 4, 4, 4, 8, 4, 4, 4, 4, 4, 4, 4, 8, 4
+DATA  8, 8, 8, 8, 8, 8, 4, 8, 4, 4, 4, 4, 4, 4, 8, 4
+DATA  4, 4, 4, 4, 4, 4, 8, 4, 4, 4, 4, 4, 4, 4, 8, 4
+DATA  4, 4, 4, 4, 4, 4, 8, 4, 4, 4, 4, 4, 4, 4, 8, 4
+DATA  4, 4, 4, 4, 4, 4, 8, 4, 4, 4, 4, 4, 4, 4, 8, 4
+DATA  4, 4, 4, 4, 4, 4, 8, 4, 4, 4, 4, 4, 4, 4, 8, 4
+DATA  8,12,12,16,12,16, 8,16, 8,16,12, 0,12,12, 8,16
+DATA  8,12,12, 0,12,16, 8,16, 8,16,12, 0,12, 0, 8,16
+DATA 12,12, 8, 0, 0,16, 8,16,16, 4,16, 0, 0, 0, 8,16
+DATA 12,12, 8, 4, 0,16, 8,16,12, 8,16, 4, 0, 0, 8,16
+
+@state_CB_table_DATA
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+DATA 8, 8, 8, 8, 8, 8,16, 8, 8, 8, 8, 8, 8, 8,16, 8
+
+
+
+
+IF BUTTON(0,#B_R2) THEN DELETE "DAT:Z_INIT.ST"
+
+
+CONST #max_items=15'37
+
+
+
+'ROM loading functions
+' TODO  this is a sloppy attempt at menu UI
+'       make consistent with emu menu
+DEF select mode   \
+OUT   romfile$,   \
+      proj$
+
+  VAR tY,   romno,    \
+      key$, list_ofs, \
+      curY
+
+  DIM romlist_arr$[0]
+  DIM romlist_GB$[0]
+
+
+  IF mode==#ROM \
+  THEN
+
+    proj$ = "GB_ROMS"
+
+  ELSE
+
+    proj$ = PROJECT()
+
+  ENDIF
+
+
+@BEGIN
+  tY       = 0
+  romno    = 0
+  list_ofs = 0
+  curY     = 0
+
+  'ACLS:
+  XSCREEN 1280/4, \
+          720/4,  \
+          4,      \
+          2
+
+  IF mode==#PROJ THEN
+    romlist_arr$ = FILES("//")
+    ?
+    ?" //"
+  ELSE
+    romlist_arr$ = FILES("DAT:"+proj$)
+    ?
+    ?" "+proj$+" [: ]"
+  ENDIF
+
+  IF mode==#ROM THEN
+    FOR tmp=0 TO LAST(romlist_arr$)
+      IF (RIGHT$(romlist_arr$[tmp],3)==".GB")||(RIGHT$(romlist_arr$[tmp],4)==".GBC")||(RIGHT$(romlist_arr$[tmp],4)==".SGB")||(RIGHT$(romlist_arr$[tmp],4)==".BIN")==1 THEN
+        PUSH romlist_GB$,romlist_arr$[tmp]
+      ENDIF
+    NEXT
+
+    IF !LEN(romlist_GB$) THEN
+      IF proj$ == "GB_ROMS" THEN
+        proj$ = PROJECT()
+        GOTO @BEGIN
+
+      ELSE
+        BEEP
+        DIALOG proj$+" doesn't contain any valid ROMs"
+        GOTO @CP
+      ENDIF
+
+    ENDIF
+
+  ELSEIF mode==#SAV THEN
+    PUSH romlist_GB$,"-- None --"
+
+    FOR tmp=0 TO LAST(romlist_arr$)
+      IF (RIGHT$(romlist_arr$[tmp],4)==".SAV") THEN
+        PUSH romlist_GB$,romlist_arr$[tmp]
+      ENDIF
+    NEXT
+
+    IF !LEN(romlist_GB$) THEN
+      IF proj$ == "GB_ROMS" THEN
+        proj$ = PROJECT()
+        GOTO @BEGIN
+
+      ELSE
+        BEEP
+        DIALOG proj$+" doesn't contain any valid backup SAVs"
+        GOTO @CP
+      ENDIF
+
+    ENDIF
+
+  ELSEIF mode==#ST THEN
+    PUSH romlist_GB$,"-- None --"
+
+    FOR tmp=0 TO LAST(romlist_arr$)
+      IF (RIGHT$(romlist_arr$[tmp],3)==".ST") THEN
+        PUSH romlist_GB$,romlist_arr$[tmp]
+      ENDIF
+    NEXT
+
+    IF !LEN(romlist_GB$) THEN
+      IF proj$ == "GB_ROMS" THEN
+        proj$ = PROJECT()
+        GOTO @BEGIN
+
+      ELSE
+        BEEP
+        DIALOG proj$+" doesn't contain any valid save states"
+        GOTO @CP
+      ENDIF
+
+    ENDIF
+
+  ELSE
+    romlist_GB$ = romlist_arr$
+  ENDIF
+
+@LIST
+  IF     curY < 0 THEN
+    curY=LAST(romlist_GB$)
+  ENDIF
+  IF     curY > LAST(romlist_GB$) THEN
+    curY=0
+  ENDIF
+
+  WHILE (curY-list_ofs) < 0
+    list_ofs = (list_ofs-1)MOD LEN(romlist_GB$)
+  WEND
+
+  WHILE (curY-list_ofs) != ((curY-list_ofs) MOD #max_items)
+    list_ofs = (list_ofs+1)MOD LEN(romlist_GB$)
+  WEND
+
+  FOR tmp=0 TO #max_items-1'LAST(romlist_GB$)
+    IF (tmp+list_ofs)>=LEN(romlist_GB$)THEN
+      COLOR #C_MAROON
+      ?"                                      "
+      BREAK
+
+    ELSE
+      COLOR HSVF((tmp+list_ofs)/LEN(romlist_GB$),191/255,255/255)
+    ENDIF
+
+    tY = 3+tmp
+
+    LOCATE 0,tY
+    ?FORMAT$("   %2D: %S                    ",tmp+list_ofs,romlist_GB$[tmp+list_ofs])
+  NEXT
+
+  LOCATE 0,#max_items+3
+  ?:?:COLOR #C_WHITE
+
+  IF mode==#ROM THEN
+    ?" Select ROM with , then press "
+
+  ELSEIF mode==#SAV THEN
+    ?" Select SAV with , then press "
+
+  ELSEIF mode==#ST THEN
+    ?" Select ST with , then press "
+
+  ELSE
+    ?" Select project with , then press "
+  ENDIF
+
+@BTN
+  LOCATE 2,3+((curY-list_ofs) MOD #max_items)
+  ?""
+
+  VSYNC
+
+@WHILE
+  WHILE key$!=CHR$(&H0D)
+    key$ = INKEY$()
+
+    IF mode!=#PROJ && key$==CHR$(&H08)GOTO @CP
+
+    IF key$==CHR$(&H1E)    THEN
+      DEC curY:GOTO @LIST
+
+    ELSEIF key$==CHR$(&H1F)    THEN
+      INC curY:GOTO @LIST
+
+    ELSEIF key$==CHR$(&H1D)    THEN
+      DEC curY,#max_items:GOTO @LIST
+
+    ELSEIF key$==CHR$(&H1C)    THEN
+      INC curY,#max_items:GOTO @LIST
+
+    ENDIF
+  WEND
+  romno = curY MOD LEN(romlist_GB$)
+  IF mode==#ROM THEN
+    romfile$ = RIGHT$(romlist_GB$[romno],LEN(romlist_GB$[romno])-4)'TODO
+    IF proj$[LAST(proj$)]=="/" THEN proj$ = LEFT$(proj$,LAST(proj$))
+  ELSEIF mode==#SAV THEN
+    IF romlist_GB$[romno] == "-- None --" THEN
+      romfile$="-"
+    ELSE
+      romfile$ = RIGHT$(romlist_GB$[romno],LEN(romlist_GB$[romno])-4)
+      IF proj$[LAST(proj$)]=="/" THEN proj$ = LEFT$(proj$,LAST(proj$))
+    ENDIF
+  ELSEIF mode==#ST THEN
+    IF romlist_GB$[romno] == "-- None --" THEN
+      romfile$="-"
+    ELSE
+      romfile$ = RIGHT$(romlist_GB$[romno],LEN(romlist_GB$[romno])-4)
+      IF proj$[LAST(proj$)]=="/" THEN proj$ = LEFT$(proj$,LAST(proj$))
+    ENDIF
+  ELSE
+    proj$ = romlist_GB$[romno]
+  ENDIF
+RETURN
+
+@CP
+'  proj$ = selectproj()
+  select #PROJ OUT ,proj$
+  romlist_GB$ = ARRAY$(0)
+  GOTO @BEGIN
+END
+
+
+DEF tilemap_init
+  VAR I,J
+
+  draw_border
+
+  FOR I=0 TO &H27FF
+    CHR_map$[I] = CHR$(I+&HE800)
+  NEXT I
+FOR I=0 TO &H9FFF
+  J = (I AND &H1FFE)
+  tile = (J >>> 4)AND 511
+  y    = (J >>> 1)AND 7
+    ty = ((tile>>>6)<<3)OR y
+  d0 = J+&H8000
+  d1 = J+&H8001
+
+  _d0[I]=d0
+  _d1[I]=d1
+  _addr[I]=J
+  _tile[I]=tile
+  _ty[I]=ty
+NEXT
+END
+
+DEF draw_border
+  TCOLOR 2,#border_color
+  FOR I=0 TO 2
+    FOR J=0 TO 127
+      TPUT 2,J,I,""
+    NEXT J
+  NEXT I
+  FOR I=3 TO 20
+    FOR J=0 TO 9
+      TPUT 2,J,I,""
+    NEXT J
+    FOR J=30 TO 127
+      TPUT 2,J,I,""
+    NEXT J
+  NEXT I
+  FOR I=21 TO 63
+    FOR J=0 TO 127
+      TPUT 2,J,I,""
+    NEXT J
+  NEXT I
+END
+
+DEF OBJ_init
+  FOR I=0 TO 79
+    SPSET I,1024,0,8,8
+  NEXT
+  
+  RESIZE div_4,&H10000
+  FOR I=0 TO &HFFFF
+    div_4[I] = (I DIV 4)MOD 40
+  NEXT
+  
+  RESIZE u_val,1536
+  RESIZE v_val,1536
+  FOR I=0 TO 1535
+    u_val[I]  = ((I AND 63)*8)+1024
+    v_val[I]  = ((I DIV 64)*8)
+  NEXT
+  
+  RESIZE y_flp_val,256
+  RESIZE x_flp_val,256
+  FOR I=0 TO 255
+    y_flp_val[I] = (I AND &B01000000)!=0
+    x_flp_val[I] = (I AND &B00100000)!=0
+  NEXT
+END
+
+
+DEF init_wav_ram
+  VAR I
+
+  FOR I=0 TO &HF
+    IF !(I AND 1) THEN
+      MEM[wav_ptrn_ram_table[I DIV 2]]=&H00
+    ELSE
+      MEM[wav_ptrn_ram_table[I DIV 2]]=&HFF
+    ENDIF
+  NEXT
+END
+
+DEF init_APU
+  SNDSTOP
+  BGMCLEAR
+
+  FOR i=0 TO 255
+'    env#[i] = (i AND 7)*(64/7)
+    envD#[i] = 64-((i AND 7))
+'    envD#[i] = 127-(i AND 7)*(127/7)
+    IF i==0 THEN envD#[i]=127
+
+'    envU#[i] = 64+(i AND 7)*(127/7)
+'    envU#[i] = 127-(i AND 7)*(127/7)
+'    envU#[i] = 64-((i AND 7))
+    envU#[i] = (i AND 7)*(127/7)
+    IF i==0 THEN envU#[i]=127
+
+'    inv#[i] = (i AND&HF0)/240
+'    inv#[i] = (i AND&HF0)/240
+    inv#[i] = ((i AND&HF0)+((i AND&HF0)>>>4))/255
+'    IF inv#[i]!=0 THEN inv#[i]=inv#[i]+.2
+
+    vlv#[i] = (i AND&H70)*1.25
+    vrv#[i] = (i AND&H07)*20
+  NEXT
+
+  vl#=&H70*1.25
+  vr#=&H07*20
+
+  d1$="FFFFFFFF00000000"*8
+  WAVSET 224,127,127,127,127,d1$,69
+  l1#=1
+  v1l=1
+  v1r=1
+  fv1#=&HF0/96
+  fi1#=envD#[7]
+  dir1#=1.8
+
+  BGMSET 128,\
+  ":0 @224 @E  $3,127,127,127 V$0 T$2 /Q32 Q4/ P  0 O0 A/& @E 127,0,0,127[A1&]/"+\
+  ":2 @224 @E 127, $3,  0,127 V$5 T$2 /Q32 Q4/ P  0 O0 A"+\
+  ":1 @224 @E  $3,127,127,127 V$1 T$2 /Q32 Q4/ P127 O0 A/& @E 127,0,0,127[A1&]/"+\
+  ":3 @224 @E 127, $3,  0,127 V$6 T$2 /Q32 Q4/ P127 O0 A"
+
+  BGMVAR 0,0,7 'Volume L
+  BGMVAR 0,1,7 'Volume R
+  BGMVAR 0,2,4   'Length
+
+
+  d2$="FFFFFFFF00000000"*8
+  WAVSET 225,127,127,127,127,d2$,69
+  l2#=1
+  v2l=1
+  v2r=1
+  fv2#=&HF0/96
+  fi2#=envD#[7]
+  dir2#=1.8
+
+  BGMSET 129,\
+  ":0 @225 @E  $3,127,127,127 V$0 T$2 /Q32 Q4/ P  0 O0 A/& @E 127,0,0,127[A1&]/"+\
+  ":2 @225 @E 127, $3,  0,127 V$5 T$2 /Q32 Q4/ P  0 O0 A"+\
+  ":1 @225 @E  $3,127,127,127 V$1 T$2 /Q32 Q4/ P127 O0 A/& @E 127,0,0,127[A1&]/"+\
+  ":3 @225 @E 127, $3,  0,127 V$6 T$2 /Q32 Q4/ P127 O0 A"
+
+  BGMVAR 1,0,7 'Volume L
+  BGMVAR 1,1,7 'Volume R
+  BGMVAR 1,2,4   'Length
+
+
+  l3#=1
+  v3l=1
+  v3r=1
+  WAVSET 226,127,127,127,127,WAV_RAM$*8,81
+
+  BGMSET 130,\
+  ":0 @226 V$0 T$2 /Q32 Q32/ P  0 O0 A/& @E 127,0,0,127[A1&]/"+\
+  ":1 @226 V$1 T$2 /Q32 Q32/ P127 O0 A/& @E 127,0,0,127[A1&]/"
+
+  BGMVAR 2,0,7 'Volume L
+  BGMVAR 2,1,7 'Volume R
+  BGMVAR 2,2,4   'Length
+
+  d4$=FORMAT$("%04X%04X%04X%04X%04X%04X%04X%04X",RND(65536),RND(65536),RND(65536),RND(65536),RND(65536),RND(65536),RND(65536),RND(65536))
+  WAVSET 227,127,127,127,127,d4$,69
+  l4#=1
+  v4l=1
+  v4r=1
+  fv4#=&HF0/96
+  fi4#=envD#[7]
+  dir4#=1.8
+
+  BGMSET 131,\
+  ":0 @227 @E  $3,127,127,127 V$0 T$2 /Q32 Q4/ P  0 O0 A/& @E 127,0,0,127[A1&]/"+\
+  ":2 @227 @E 127, $3,  0,127 V$5 T$2 /Q32 Q4/ P  0 O0 A"+\
+  ":1 @227 @E  $3,127,127,127 V$1 T$2 /Q32 Q4/ P127 O0 A/& @E 127,0,0,127[A1&]/"+\
+  ":3 @227 @E 127, $3,  0,127 V$6 T$2 /Q32 Q4/ P127 O0 A"
+
+  BGMVAR 3,0,7 'Volume L
+  BGMVAR 3,1,7 'Volume R
+  BGMVAR 3,2,4   'Length
+
+
+END
+
+
+DEF init_tones
+  VAR B=&H7FFF, f0
+  FOR f0=0 TO 2047
+    pitches#[f0]=1200*LOG((4194304/(32*(2048-f0)))/27.50,2)
+  NEXT
+END
+
+
+DEF table_init
+  VAR i,j, c_f,h_f,n_f,z_f, Nc_f, old
+
+  IF     #scale==1 THEN
+  ELSEIF #scale==2 THEN
+  ELSEIF #scale==3 THEN
+
+
+
+  ELSEIF #scale==4 THEN
+    FOR i=0 TO 255
+      line_ofs_table_x#[i] = ((i-80)/640)
+      line_ofs_table_y#[i] = ((i+306)/720)
+    NEXT
+
+    FOR i=0 TO 179
+      BG_line_ofs#[i,1] = .5
+      win_line_ofs#[i,1] = .5
+      BG_line_ofs#[i,3] = .25
+      win_line_ofs#[i,3] = .25
+    NEXT
+
+
+
+  ELSEIF #scale==5 THEN
+    FOR i=0 TO 255
+      line_ofs_table_x#[i] = ((i-60)/800)
+      line_ofs_table_y#[i] = ((i+145)/900)
+    NEXT
+
+    FOR i=0 TO 179
+      BG_line_ofs#[i,1] = .4
+      win_line_ofs#[i,1] = .4
+      BG_line_ofs#[i,3] = .2
+      win_line_ofs#[i,3] = .2
+    NEXT
+
+
+
+  ENDIF
+
+
+  RESTORE @Z_table_DATA
+  FOR i=0 TO 255
+    READ Z_table[i]
+  NEXT
+
+  RESTORE @state_table_DATA
+  FOR i=0 TO 255
+    READ state_table[i]
+  NEXT
+
+  RESTORE @state_CB_table_DATA
+  FOR i=0 TO 255
+    READ state_CB_table[i]
+  NEXT
+
+  c_f=0:h_f=0:n_f=0
+  GOSUB @DAA_loop
+  c_f=1:h_f=0:n_f=0
+  GOSUB @DAA_loop
+  c_f=0:h_f=1:n_f=0
+  GOSUB @DAA_loop
+  c_f=0:h_f=0:n_f=1
+  GOSUB @DAA_loop
+  c_f=1:h_f=1:n_f=0
+  GOSUB @DAA_loop
+  c_f=1:h_f=0:n_f=1
+  GOSUB @DAA_loop
+  c_f=0:h_f=1:n_f=1
+  GOSUB @DAA_loop
+  c_f=1:h_f=1:n_f=1
+  GOSUB @DAA_loop
+  
+  GOTO @DAA_end
+  
+@DAA_loop
+  FOR i=0 TO 255
+    Nc_f = 0
+    old = i
+    IF c_f THEN old=old OR 256
+    IF h_f THEN old=old OR 512
+    IF n_f THEN old=old OR 1024
+    j = i
+    IF !n_f THEN
+      IF h_f || (i AND &H0F) > &H09 THEN
+        INC j,&H06
+      ENDIF
+      IF c_f || (i > &H99) THEN
+        INC j,&H60
+      ENDIF
+      IF (j > &H9F) THEN
+        Nc_f = 1
+      ENDIF
+    ELSE
+      IF h_f THEN
+        DEC j,&H06
+      ENDIF
+      IF c_f THEN
+        DEC j,&H60
+      ENDIF
+    ENDIF
+    j = j AND &HFF
+    IF !j THEN z_f=1 ELSE z_f = 0
+    DAA_table[old] = (j<<8) + ( ((z_f<<3) + (n_f<<2) + c_f OR Nc_f)<<4 )
+  NEXT i
+RETURN
+  
+@DAA_end
+  prepare_FlagTables
+END
+
+
+' Flag register LUT
+DEF prepare_FlagTables
+  VAR DMG_A,reg,regc
+  VAR J, J_L, J_H
+  VAR DMG_F
+  VAR idx
+  VAR flg
+
+  ' If cache exists
+  IF CHKFILE("DAT:Z_ADD_table.DAT")   \
+  && CHKFILE("DAT:Z_ADC_table.DAT")   \
+  && CHKFILE("DAT:Z_SUB_table.DAT")   \
+  && CHKFILE("DAT:Z_SBC_table.DAT")   \
+  && CHKFILE("DAT:Z_SGN16_table.DAT") \
+      \
+  THEN
+
+    ADD_table  =LOADV("DAT:Z_ADD_table.DAT")
+    ADC_table  =LOADV("DAT:Z_ADC_table.DAT")
+    SUB_table  =LOADV("DAT:Z_SUB_table.DAT")
+    SBC_table  =LOADV("DAT:Z_SBC_table.DAT")
+    SGN16_table=LOADV("DAT:Z_SGN16_table.DAT")
+
+  ELSE
+
+    ?"Preparing cache";
+
+    FOR DMG_A=0 TO 255
+      FOR reg=0 TO 255
+
+        idx=(DMG_A<<8)+reg
+        regc = reg+1
+
+        ' SUB
+        J     = DMG_A - reg
+        J_L   = J AND 255
+        J_H   = J >>> 8
+        DMG_F = Z_table[J_L]       OR\
+          &H40                     OR\
+          (((DMG_A - reg)<0)*&H10) OR\
+          ((((DMG_A AND&H0F)       - \
+          (reg AND&H0F))<0)*&H20)
+        SUB_table[idx]=DMG_F+(J_L<<8)
+
+        ' SBC
+        J     = DMG_A - regc
+        J_L   = J AND 255
+        J_H   = J >>> 8
+        DMG_F = Z_table[J_L]        OR\
+          &H40                      OR\
+          (((DMG_A - regc)<0)*&H10) OR\
+          ((((DMG_A AND&H0F)        - \
+          ((reg AND&H0F)+1))<0)*&H20)
+        SBC_table[idx]=DMG_F+(J_L<<8)
+
+        ' ADD
+        J     = DMG_A + reg
+        J_L   = J AND 255
+        J_H   = J >>> 8
+        DMG_F = Z_table[J_L]          OR\
+          (((DMG_A + reg)>&HFF)*&H10) OR\
+          ((((DMG_A AND&H0F)          + \
+          (reg AND&H0F))>&H0F)*&H20)
+        ADD_table[idx]=DMG_F+(J_L<<8)
+
+        ' ADC
+        J     = DMG_A + regc
+        J_L   = J AND 255
+        J_H   = J >>> 8
+        DMG_F = Z_table[J_L]           OR\
+          (((DMG_A + regc)>&HFF)*&H10) OR\
+          ((((DMG_A AND&H0F)           + \
+          ((reg AND&H0F)+1))>&H0F)*&H20)
+        ADC_table[idx]=DMG_F+(J_L<<8)
+
+      NEXT
+      ?".";
+    NEXT
+
+    ' Unsigned short -> signed short
+    FOR J=0 TO &HFFFF
+
+      IF J>&H7FFF THEN
+        SGN16_table[J]=J-&HFFFF
+
+      ELSE
+        SGN16_table[J]=J
+
+      ENDIF
+      ?".";
+    NEXT
+
+  ' Save cache
+  SAVEV"DAT:Z_ADD_table.DAT",ADD_table
+  SAVEV"DAT:Z_ADC_table.DAT",ADC_table
+  SAVEV"DAT:Z_SUB_table.DAT",SUB_table
+  SAVEV"DAT:Z_SBC_table.DAT",SBC_table
+  SAVEV"DAT:Z_SGN16_table.DAT",SGN16_table
+  CLS
+
+  ENDIF 'cache exists
+
+  ' INC / DEC
+  FOR reg=0 TO 255
+    flg= Z_table[reg]
+    IF !(reg AND 15) THEN flg=flg OR &H20
+    INC_table[reg]=flg
+
+    flg = Z_table[reg] OR &H40
+    IF (reg AND 15)==15 THEN flg = flg OR &H20
+    DEC_table[reg]=flg
+  NEXT
+
+  ' Unsigned char -> signed char
+  FOR J=0 TO 255
+    IF J>127 THEN
+      SGN8_table[J]=J-256+1
+      SGN8M_table[J]=J-256
+    ELSE
+      SGN8_table[J]=J+1
+      SGN8M_table[J]=J
+    ENDIF
+  NEXT
+
+  prepare_ShiftBitTables
+
+END
+
+
+DEF prepare_ShiftBitTables
+  VAR i,reg
+  
+  FOR i=0 TO 255
+
+  'RLC
+    DMG_F = i>>>7
+    reg = ((i<<1) OR DMG_F) AND 255
+    DMG_F = (DMG_F<<4) OR Z_table[reg]
+
+    RLC_table[i] = DMG_F + (reg<<8)
+
+  'RL NC
+    IF i AND &H80 THEN
+      reg = (i<<1)AND 255
+      DMG_F = Z_table[reg] OR &H10
+    ELSE
+      reg = (i<<1)AND 255
+      DMG_F = Z_table[reg]
+    ENDIF
+
+    RL_NC_table[i] = DMG_F + (reg<<8)
+
+  'RL C
+    IF i AND &H80 THEN
+      reg = ((i<<1) OR 1)AND 255
+      DMG_F = Z_table[reg] OR &H10
+    ELSE
+      reg = ((i<<1) OR 1)AND 255
+      DMG_F = Z_table[reg]
+    ENDIF
+
+    RL_C_table[i] = DMG_F + (reg<<8)
+
+  'RRC
+    DMG_F = i AND 1
+    reg = (i>>>1) OR (DMG_F<<7)
+    DMG_F = (DMG_F<<4) OR Z_table[i]
+
+    RRC_table[i] = DMG_F + (reg<<8)
+
+  'RR NC
+    IF (i AND 1) THEN
+      reg = (i>>>1)AND 255
+      DMG_F = Z_table[reg] OR &H10
+    ELSE
+      reg = (i>>>1)AND 255
+      DMG_F = Z_table[reg]
+    ENDIF
+
+    RR_NC_table[i] = DMG_F + (reg<<8)
+
+  'RR C
+    IF (i AND 1) THEN
+      reg = ((i>>>1) OR &H80)AND 255
+      DMG_F = Z_table[reg] OR &H10
+    ELSE
+      reg = ((i>>>1) OR &H80)AND 255
+      DMG_F = Z_table[reg]
+    ENDIF
+
+    RR_C_table[i] = DMG_F + (reg<<8)
+
+  'SLA
+    DMG_F = i>>>7
+    reg = (i<<1) AND 255
+    DMG_F = (DMG_F<<4) OR Z_table[reg]
+
+    SLA_table[i] = DMG_F + (reg<<8)
+
+  'SRA
+    DMG_F = i AND 1
+    reg = (i>>>1) OR (i AND &H80)
+    DMG_F = (DMG_F<<4) OR Z_table[reg]
+
+    SRA_table[i] = DMG_F + (reg<<8)
+
+  'SLL
+    DMG_F = (i>>>7)
+    reg = ((i<<1) OR 1) AND 255
+    DMG_F = (DMG_F<<4) OR Z_table[reg]
+
+    SLL_table[i] = DMG_F + (reg<<8)
+
+  'SRL
+    DMG_F = i AND 1
+    reg = i >>> 1
+    DMG_F = (DMG_F<<4) OR Z_table[reg]
+
+    SRL_table[i] = DMG_F + (reg<<8)
+
+  'SWAP
+    reg = ((i AND &H0F)<<4)+(i>>>4)
+    DMG_F=Z_table[reg]
+
+    SWAP_table[i] = DMG_F + (reg<<8)
+
+  'BIT7
+    DMG_F = &H20
+    IF (i AND 128) THEN
+        DMG_F = DMG_F AND &H7F
+    ELSE
+        DMG_F = DMG_F OR &H80
+    ENDIF
+
+    BIT7_table[i] = DMG_F
+
+  'BIT6
+    DMG_F = &H20
+    IF (i AND 64) THEN
+        DMG_F = DMG_F AND &H7F
+    ELSE
+        DMG_F = DMG_F OR &H80
+    ENDIF
+
+    BIT6_table[i] = DMG_F
+
+  'BIT5
+    DMG_F = &H20
+    IF (i AND 32) THEN
+        DMG_F = DMG_F AND &H7F
+    ELSE
+        DMG_F = DMG_F OR &H80
+    ENDIF
+
+    BIT5_table[i] = DMG_F
+
+  'BIT4
+    DMG_F = &H20
+    IF (i AND 16) THEN
+        DMG_F = DMG_F AND &H7F
+    ELSE
+        DMG_F = DMG_F OR &H80
+    ENDIF
+
+    BIT4_table[i] = DMG_F
+
+  'BIT3
+    DMG_F = &H20
+    IF (i AND 8) THEN
+        DMG_F = DMG_F AND &H7F
+    ELSE
+        DMG_F = DMG_F OR &H80
+    ENDIF
+
+    BIT3_table[i] = DMG_F
+
+  'BIT2
+    DMG_F = &H20
+    IF (i AND 4) THEN
+        DMG_F = DMG_F AND &H7F
+    ELSE
+        DMG_F = DMG_F OR &H80
+    ENDIF
+
+    BIT2_table[i] = DMG_F
+
+  'BIT1
+    DMG_F = &H20
+    IF (i AND 2) THEN
+        DMG_F = DMG_F AND &H7F
+    ELSE
+        DMG_F = DMG_F OR &H80
+    ENDIF
+
+    BIT1_table[i] = DMG_F
+
+  'BIT0
+    DMG_F = &H20
+    IF (i AND 1) THEN
+        DMG_F = DMG_F AND &H7F
+    ELSE
+        DMG_F = DMG_F OR &H80
+    ENDIF
+
+    BIT0_table[i] = DMG_F
+
+
+  'Joypad
+    JOYP0[i] = &HF0+ ((!(i AND (1<<#btn_START))<<3)OR(!(i AND(1<<#btn_SELECT))<<2)OR(!(i AND (1<<#btn_B))<<1)OR !(i AND (1<<#btn_A)))
+
+    JOYP1[i] = &HF0+ ((!(i AND (1<<#dir_DOWN))<<3)OR(!(i AND(1<<#dir_UP))<<2)OR(!(i AND (1<<#dir_LEFT))<<1)OR !(i AND (1<<#dir_RIGHT)))
+
+  NEXT
+END
+
+
+
+
+DEF DMA_OAM_update addr,d
+  sprNo = div_4[addr]
+
+  y  =MEM[addr]
+  x  =MEM[addr+1]
+  No =MEM[addr+2]
+  atr=MEM[addr+3]
+
+  u  = u_val[No]
+  v  = v_val[No]
+
+  y_flp = y_flp_val[atr]
+  x_flp = x_flp_val[atr]
+  
+  atr = (#A_REVH*x_flp) OR (#A_REVV*y_flp)
+  
+  OAM_val[sprNo,0] = u
+  OAM_val[sprNo,1] = v
+  OAM_val[sprNo,2] = atr
+
+    SPCHR sprNo,u,v,8,8,atr
+    SPOFS sprNo,72+x,2+y
+  IF sprite_size_16 THEN
+    SPCHR sprNo+40,u+8,v,8,8,atr
+    SPOFS sprNo+40,72+x,10+y
+  ENDIF
+END
+
+DEF OAM_update addr,d
+  sprNo = div_4[addr]
+
+  ON addr AND 3 GOTO @y,@x,@uv,@attr
+@y
+    SPOFS sprNo,,2+MEM[addr]
+    IF sprite_size_16 THEN
+      SPOFS sprNo+40,,10+MEM[addr]
+    ENDIF
+RETURN
+
+@x
+    SPOFS sprNo,72+MEM[addr],
+    IF sprite_size_16 THEN
+      SPOFS sprNo+40,72+MEM[addr],
+    ENDIF
+RETURN
+
+@uv
+    No = MEM[addr]
+    u  = u_val[No]
+    v  = v_val[No]
+    OAM_val[sprNo,0] = u
+    OAM_val[sprNo,1] = v
+    SPCHR sprNo,u,v,8,8,OAM_val[sprNo,2]
+    IF sprite_size_16 THEN
+      SPCHR sprNo+40,u+8,v,8,8,OAM_val[sprNo,2]
+    ENDIF
+RETURN
+
+@attr
+    atr = MEM[addr]
+    y_flp = y_flp_val[atr]
+    x_flp = x_flp_val[atr]
+    atr = (#A_REVH*x_flp) OR (#A_REVV*y_flp)
+    OAM_val[sprNo,2] = atr
+    SPCHR sprNo,OAM_val[sprNo,0],OAM_val[sprNo,1],8,8,atr
+    IF sprite_size_16 THEN
+      SPCHR sprNo+40,OAM_val[sprNo,0]+8,OAM_val[sprNo,1],8,8,atr
+    ENDIF
+END
+
+
+
+DEF PEEK(I) 'MRDM
+  I = I AND 65535
+
+'DBG GAMESHARK
+'PKMN GREEN WALK THROUGH WALLS
+'  IF I==&HCD38THEN RETURN&H01
+  ON I>>>12 GOTO @CART0,@CART0,@CART0,@CART0,\
+                 @CART1,@CART1,@CART1,@CART1,\
+                 @MEM,@MEM,@ERAM,@ERAM,\
+                 @MEM,@MEM,@WRMM,@WHRIO
+  
+@MEM
+  RETURN MEM[I]
+@WRMM
+  RETURN MEM[I-&H2000]
+@WHRIO
+  ON (I>>>8)AND&HF GOTO @WRMM,@WRMM,@WRMM,@WRMM,\
+                        @WRMM,@WRMM,@WRMM,@WRMM,\
+                        @WRMM,@WRMM,@WRMM,@WRMM,\
+                        @WRMM,@WRMM,@MEM,@IO
+@IO
+  IF I==#SC THEN
+    RETURN MEM[I] OR &B01111110
+  ELSEIF I==#TAC THEN
+    RETURN MEM[I] OR &B11111000
+  ELSEIF I==#IF THEN
+    RETURN MEM[I] OR &B11100000
+  ELSEIF I==#STAT THEN
+    RETURN MEM[I] OR &B10000000
+  ELSEIF I==#NR10 THEN
+    RETURN MEM[I] OR &B10000000
+  ELSEIF I==#NR30 THEN
+    RETURN MEM[I] OR &B01111111
+  ELSEIF I==#NR32 THEN
+    RETURN MEM[I] OR &B10011111
+  ELSEIF I==#NR41 THEN
+    RETURN MEM[I] OR &B11000000
+  ELSEIF I==#NR44 THEN
+    RETURN MEM[I] OR &B00111111
+  ELSEIF I==#NR52 THEN
+    RETURN MEM[I] OR &B01110000
+  ELSEIF I==&HFF03 THEN
+    RETURN &B11111111
+  ELSEIF I==#P1 THEN
+    RETURN MEM[I] OR &B11000000
+  ELSEIF I==&HFF08 THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF09 THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF0A THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF0B THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF0C THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF0D THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF0E THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF15 THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF1F THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF27 THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF28 THEN
+    RETURN &B11111111
+  ELSEIF I==&HFF29 THEN
+    RETURN &B11111111
+  ELSEIF (I>=&HFF4C) && (I<=&HFF7F) THEN
+    RETURN &B11111111
+  ELSE
+    RETURN MEM[I]
+  ENDIF
+  RETURN
+
+@CART0
+  RETURN MEM[I]
+
+@CART1
+  RETURN MEM[I]
+
+@ERAM
+  IF eram_enbl THEN
+    ON MBC_type GOTO @_,@MBC1,@MBC2,@MBC3,@_,@MBC5,@MBC3_rtc,@_,@MBC_cam
+  ELSE
+    RETURN&HFF
+  ENDIF
+@_
+  RETURN&HFF
+@MBC1
+@MBC3
+@MBC3_rtc
+@MBC5
+@MBC_cam
+  RETURN MEM[I]
+@MBC2
+  RETURN MEM[(I AND&H1FF)+&HA000]AND&H0F
+END
+
+
+'************************************
+'* Memory
+'***_*********************************
+DEF POKE I,J 'MWRM
+'  I=I AND&HFFFF
+'  PERFEND 0
+  ON I>>>12 GOTO @MBC, @MBC,\
+                 @MBC, @MBC,\
+                 @MBC,@MBC,\
+                 @MBC,@MBC,\
+                 @VRAM,@VRAM,\
+                 @ERAM,@ERAM,\
+                 @WRAM,@WRAM,\
+                 @WRMM,@WRIO
+  DIALOG "Memory error"
+  RETURN
+@WRAM
+  MEM[I] = J
+  RETURN
+
+@WRMM
+  MEM[I-&H2000] = J
+  RETURN
+
+@WRIO
+  IF     I>=&HFF00 THEN
+    GOTO @IO
+  ELSEIF I<&HFE00 THEN
+    MEM[I-&H2000] = J
+    RETURN
+  ELSEIF I<&HFEA0 THEN
+    MEM[I] = J
+    OAM_update I,J
+    RETURN
+  ELSE
+    RETURN
+  ENDIF
+
+@MBC
+  ON MBC_type GOTO @END,@MBC1,@MBC2,@MBC3,@END,@MBC5,@MBC3,@END,@MBC_cam'_RTC
+RETURN
+
+@MBC1
+  IF     I<&H2000 THEN
+    eram_enbl=(J AND &HF) == &HA
+    RETURN
+
+  ELSEIF I<&H4000 THEN
+    ROM_bank = (ROM_bank AND &HE0) OR (J AND &H1F)
+    IF (J AND&H1F) == &H00THEN
+      ROM_bank=ROM_bank+1
+    ENDIF
+    GOTO @ROM_bank_switch
+    RETURN
+
+  ELSEIF I<&H6000 THEN
+    IF !ERAM_mode THEN
+      ROM_bank = (ROM_bank AND &H1F) OR (J AND &HE0)
+      ERAM_bank = 0
+      RETURN
+
+    ELSE
+      ERAM_bank = J AND 3
+      ERAM_bank_switch
+      RETURN
+
+    ENDIF
+    RETURN
+
+  ELSE
+    ERAM_mode = J AND 1
+    RETURN
+
+  ENDIF
+RETURN
+
+@MBC2
+  IF I<&H2000 THEN
+    IF NOT(I AND&H0100) THEN
+      eram_enbl = (J AND&HF)==&HA
+      RETURN
+    ENDIF
+    RETURN
+
+  ELSEIF I<&H4000 THEN
+    IF I AND &H0100 THEN
+      ROM_bank = J  AND ROM_last_bank AND &H0F
+      IF ROM_bank==0 THEN ROM_bank = 1
+      GOTO @ROM_bank_switch
+      RETURN
+
+    ENDIF
+    RETURN
+
+  ELSE
+    RETURN
+
+  ENDIF
+RETURN
+
+@MBC3
+  IF I<&H2000 THEN
+    eram_enbl = (J AND&HF)==&H0A
+    RETURN
+
+  ELSEIF I<&H4000 THEN
+    ROM_bank = (ROM_BANK AND&H180)+(J AND &H7F) AND ROM_last_bank
+    IF ROM_bank==0 THEN ROM_bank=1
+    GOTO @ROM_bank_switch
+    RETURN
+
+  ELSEIF I<&H6000 THEN
+    ERAM_bank = J AND ERAM_last_bank
+    ERAM_bank_switch
+    ROM_bank=(ROM_bank AND&H7F)+((J AND &H3)<<8) AND ROM_last_bank
+    GOTO @ROM_bank_switch
+    RETURN
+
+  ELSE
+    RETURN
+
+  ENDIF
+RETURN
+
+@MBC3_RTC
+  IF I<&H2000 THEN
+    'IF has_eram THEN
+    eram_enbl = (J AND&HF)==&H0A
+    RETURN
+
+  ELSEIF I<&H4000 THEN
+    ROM_bank = J  AND ROM_last_bank AND &H7F
+    IF ROM_bank==0 THEN ROM_bank=1
+'    ROM_bank_switch
+    GOTO @ROM_bank_switch
+    RETURN
+
+  ELSEIF I<&H5000 THEN
+'    RTC_sel = J MOD &HD 'TODO optimize
+    RETURN
+
+  ELSEIF I<&H6000 THEN
+    ERAM_bank = J AND ERAM_last_bank
+    ERAM_bank_switch
+    RETURN
+
+  ELSEIF I<&H8000 THEN
+'    IF (!ERAM_mode) && has_RTC THEN
+    ERAM_mode = J AND 1
+    RETURN
+
+  ENDIF
+RETURN
+
+
+
+@MBC5
+  IF I<&H2000 THEN
+    eram_enbl = (J AND&HF)==&H0A
+    RETURN
+
+  ELSEIF I<&H3000 THEN
+    ROM_bank = (ROM_bank AND &H100) OR J AND ROM_last_bank
+    GOTO @ROM_bank_switch
+    RETURN
+
+  ELSEIF I<&H4000 THEN
+    ROM_bank = (ROM_bank AND &HFF) OR (J AND 1)<<8 AND ROM_last_bank
+    GOTO @ROM_bank_switch
+    RETURN
+
+  ELSEIF I<&H6000 THEN
+    ERAM_bank = J AND 3
+    ERAM_bank_switch
+    RETURN
+
+  ELSE
+    RETURN
+
+  ENDIF
+RETURN
+
+@MBC_cam
+  IF I<&H2000 THEN
+    eram_enbl=(J AND&HF)==&HA
+    RETURN
+
+  ELSEIF I<&H4000 THEN
+    ROM_bank = J AND &H3F
+    GOTO @ROM_bank_switch
+    RETURN
+
+  ELSEIF I<&H4000 THEN
+    IF J<&H10 THEN
+      ERAM_bank = J
+      ERAM_bank_switch
+      cam_regs_on = 0
+      RETURN
+
+    ELSE
+      cam_regs_on = 1
+      RETURN
+
+    ENDIF
+    RETURN
+
+  ELSE
+    RETURN
+  ENDIF
+RETURN
+
+@ROM_bank_switch
+  IF ROM_bank == prev_ROM_bank THEN RETURN
+
+  COPY MEM,&H4000,ROM_dirty,&H4000*(ROM_bank AND ROM_last_bank),&H4000
+
+  prev_ROM_bank = ROM_bank
+RETURN
+
+@VRAM
+    MEM[I] = J
+    IF I>=&H8000 AND I<=&H97FF THEN
+      GOTO @VRAM_render_tile
+
+    ELSEIF I<&H9C00 THEN
+      GOTO @VRAM_put_tilemap0
+
+    ELSE
+      GOTO @VRAM_put_tilemap1
+
+    ENDIF
+RETURN
+
+@VRAM_render_tile
+  d0 = MEM[_d0[I]]
+  d1 = MEM[_d1[I]]
+  
+  FOR x=0 TO 7
+    sx = _sx[x]
+    
+    tmp=((d0 AND sx)==0)OR(((d1 AND sx)==0)<<1)
+
+    tx = ((_tile[I] AND 63)<<3)OR x
+    tmp2=(_ty[I]<<9)OR tx
+
+    IF VRAM_cache[tmp2]==tmp THEN CONTINUE
+
+    VRAM_cache[tmp2] = tmp
+    VRAM_gfx[_ty[I],tx+1024] = pal[tmp]
+    VRAM_tileupdate=1
+
+  NEXT x
+RETURN
+
+@VRAM_put_tilemap0
+  I = I - &H9800
+  ofs=(!BG_win_tile_data && J<128)<<8
+  tile=J+ofs+&HE800
+
+  IF tile0_cache[I] == tile THEN RETURN
+
+  y=((I DIV 32)<<7)+((I AND 31)<<1)
+  VRAM_bg[y]=tile
+  VRAM_bg[y+64]=tile
+  VRAM_bg[y+4096]=tile
+  VRAM_bg[y+4160]=tile
+  tile0_cache[I] = tile
+  VRAM_put0=1
+RETURN
+
+@VRAM_put_tilemap1
+  I = I - &H9C00
+  ofs=((!BG_win_tile_data && J<128))<<8
+  tile=J+ofs+&HE800
+
+  IF tile1_cache[I] == tile THEN RETURN
+
+  VRAM_win[I DIV 32,(I AND 31)<<1]=tile
+  tile1_cache[I] = tile
+  VRAM_put1=1
+RETURN
+
+@ERAM
+  IF eram_enbl THEN
+    IF MBC_type == 2 THEN 
+      MEM[(I AND &H1FF)+&HA000] = J:RETURN
+
+    ELSE
+      MEM[I] = J
+      RETURN
+
+    ENDIF
+
+  ELSE
+    RETURN
+
+  ENDIF
+RETURN
+
+
+@IO
+ON I-&HFF00 GOTO \
+\'x0       x1       x2       x3       x4       x5       x6       x7       x8       x9       xA       xB       xC       xD       xE       xF
+  @P1,     @REGULAR,@REGULAR,@REGULAR,@DIV,    @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ '0x
+  @REGULAR,@NR11,   @NR12,   @NR13,   @NR14,   @REGULAR,@NR21,   @NR22,   @REGULAR,@NR24,   @NR30,   @NR31,   @NR32,   @REGULAR,@NR34,   @REGULAR,\ '1x
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@NR50,   @NR51,   @NR52,   @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ '2x
+  @FF30,   @FF31,   @FF32,   @FF33,   @FF34,   @FF35,   @FF36,   @FF37,   @FF38,   @FF39,   @FF3A,   @FF3B,   @FF3C,   @FF3D,   @FF3E,   @FF3F,   \ '3x
+  @LCDC,   @STAT,   @REGULAR,@REGULAR,@LY,     @REGULAR,@DMA,    @REGULAR,@REGULAR,@REGULAR,@WY,     @WX,     @REGULAR,@REGULAR,@REGULAR,@REGULAR,\ '4x
+  @FF50,   @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ '5x
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ '6x
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ '7x
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ '8x
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ '9x
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ 'Ax
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ 'Bx
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ 'Cx
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ 'Dx
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,\ 'Ex
+  @REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR,@REGULAR   'Fx
+
+@REGULAR
+  MEM[I] = J
+RETURN
+
+'-----------------------------------
+
+
+
+'*******
+'* PPU *
+'*******
+
+'To make sure the current PPU mode
+'is visible:
+@STAT
+  MEM[#STAT] = \
+    (J AND &HFC)\
+    OR PPU_mode
+RETURN
+
+
+@WY
+  MEM[I] = J
+
+  LMATRIX \
+    #win_layer,\
+    -146,\
+    -42,\
+    MEM[#WX]*2,\
+    J*2
+RETURN
+
+
+@WX
+  MEM[I] = J
+
+  LMATRIX \
+    #win_layer,\
+    -146,\
+    -42,\
+    J*2,\
+    MEM[#WY]*2
+RETURN
+
+
+@LY 
+  IF !PPU_on THEN RETURN
+
+  'Reset if on current line
+  IF I==#LY AND PPU_on THEN
+    MEM[I] = 0
+    RETURN
+  ENDIF
+
+RETURN
+
+
+@DMA
+  MEM[I] = J
+
+  'Perform DMA copy operation
+  COPY MEM,&HFE00,MEM,(J<<8),&HA0
+
+  'Update visible sprites
+  FOR I=&HFE00 TO &HFE9F STEP 4
+    DMA_OAM_update I,J
+  NEXT
+
+RETURN
+
+@LCDC
+  MEM[I] = J
+
+  IF   J    AND 1 THEN
+    TSHOW 1
+    BG_on = 1
+  ELSE
+    THIDE 1
+    BG_on = 0
+  ENDIF
+
+  IF (J>>>1)AND 1 THEN
+    FOR I=0 TO 39
+      SPSHOW I
+      SPSHOW I+40
+    NEXT
+  ELSE
+    FOR I=0 TO 39
+      SPHIDE I
+      SPHIDE I+40
+    NEXT
+  ENDIF
+
+  IF (J>>>2)AND 1 THEN
+    sprite_size_16 = 1
+  ELSE
+    sprite_size_16 = 0
+  ENDIF
+
+  IF (J>>>3)AND 1 THEN
+    BG_tile_map = 1
+  ELSE
+    BG_tile_map = 0
+  ENDIF
+
+  IF (J>>>4)AND 1 THEN
+    BG_win_tile_data = 1
+  ELSE
+    BG_win_tile_data = 0
+  ENDIF
+
+  IF (J>>>5)AND 1 THEN
+    TSHOW 0
+    SPSHOW 100
+    win_on = 1
+  ELSE
+    THIDE 0
+    SPHIDE 100
+    win_on = 0
+  ENDIF
+
+  IF (J>>>6)AND 1 THEN
+    win_tile_map = 1
+  ELSE
+    win_tile_map = 0
+  ENDIF
+
+  IF (J>>>7)AND 1 THEN
+    PPU_on = 1
+  ELSE
+    PPU_on = 0
+    MEM[#LY] = 0
+    PPU_mode = 1
+    DMG_state0 = 0
+  ENDIF
+
+RETURN
+
+'***********
+'* PPU end *
+'***********
+
+'-----------------------------------
+
+
+
+'*******
+'* APU *
+'*******
+
+'''''''''''''''''''''''''''''''''''''''
+' The APU emulation is glitchy and    '
+' over all lacking at the moment...   '
+' Don't expect all games to sound     '
+' bearable. :>                        '
+'                                     '
+'''''''''''''''''''''''''''''''''''''''
+
+' -- Channel 1: Pulse (sweep) --
+@NR11
+  MEM[I] = J
+
+  'Duty
+  d1$=wav_duty$[J>>>6]*8
+
+  'Length
+'  lP1=(64-(J AND 63))/1024
+'  lP1=(63-(J AND 63))/255
+  lP1#=(63-(J AND 63))/511 'TODO
+
+RETURN
+
+
+@NR12
+  MEM[I] = J
+
+  'Initial vol
+  fv1# = inv#[J]
+
+'  'Env type (slope)
+'  fi1# = env#[J]
+
+  'Direction
+  IF J AND 8 THEN
+'    dir1# = inv#[&HF0]
+    dir1# = 1.0
+  fi1# = envU#[J]
+    RETURN
+  ELSE
+'    dir1# = inv#[&H00]
+    dir1# = 0.0
+  fi1# = envD#[J]
+    RETURN
+  ENDIF
+
+RETURN
+
+
+@NR13
+  MEM[I] = J
+
+  'Set frequency:
+  f1 = (MEM[#NR14]<<8)+J
+
+RETURN
+
+
+@NR14
+  tmp = J AND &B111
+  MEM[I] = tmp
+
+  'If trigger bit is set...
+  IF J AND&H80 THEN
+    t1 = 1
+
+    'If consecutive bit is set...
+    IF J AND&H40 THEN le1 = 1 ELSE le1 = 0
+
+    'Set duty
+    WAVSET 224,127,127,127,127,d1$,69
+
+  ENDIF
+
+  'Set frequency
+  f1 = (tmp<<8)+MEM[#NR13]
+
+RETURN
+
+
+' -- Channel 2: Pulse --
+@NR21
+  MEM[I] = J
+
+  'Duty
+  d2$=wav_duty$[J>>>6]*8
+
+  'Length
+'  lP2=(64-(J AND 63))/1024
+'  lP2=(63-(J AND 63))/255
+  lP2#=(63-(J AND 63))/511 'TODO
+
+RETURN
+
+
+@NR22
+  MEM[I] = J
+
+  'Initial vol
+  fv2# = inv#[J]
+
+'  'Env type (slope)
+'  fi2# = env#[J]
+
+  'Direction
+  IF J AND 8 THEN
+'    dir2# = inv#[&HF0]
+    dir2# = 1.0
+  fi2# = envU#[J]
+    RETURN
+  ELSE
+'    dir2# = inv#[&H00]
+    dir2# = 0.0
+  fi2# = envD#[J]
+    RETURN
+  ENDIF
+
+RETURN
+
+
+@NR23
+  MEM[I] = J
+
+  'Set frequency:
+  f2 = (MEM[#NR24]<<8)+J
+
+RETURN
+
+
+@NR24
+  tmp = J AND &B111
+  MEM[I] = tmp
+
+  'If trigger bit is set...
+  IF J AND&H80 THEN
+    t2=1
+
+    'If consecutive bit is set...
+    IF J AND&H40 THEN le2 = 1 ELSE le2 = 0
+
+    'Set duty
+    WAVSET 225,127,127,127,127,d2$,69
+
+  ENDIF
+
+  'Set frequency
+  f2 = (tmp<<8)+MEM[#NR23]
+
+RETURN
+
+
+' -- Channel 3: Wave --
+
+'TODO
+'@NR30
+'  MEM[I] = J
+'  ch3_sound_on = (J AND&H80)==&H80
+'  IF ch3_sound_on THEN
+'    
+'  ELSE
+'    
+'  ENDIF
+'RETURN
+
+
+@NR30
+  MEM[I] = J
+
+  IF J AND&H80 THEN
+    von3=1
+'    BGMPLAY 2,130,von3*apu_pwr*v3
+    t3=1
+    RETURN
+  ELSE
+    von3=0
+    BGMSTOP 2
+    RETURN
+  ENDIF
+
+  'TODO
+
+RETURN
+
+
+@NR31
+  MEM[I] = J
+
+  'Length
+'  lP3=(256-J)/1024
+  lP3#=(255-J)/4095 'TODO
+RETURN
+
+
+@NR32
+  MEM[I] = J
+  v3 = wvol[(J>>>5) AND 3]
+'  BGMVOL 2,von3*apu_pwr*v3
+RETURN
+
+
+@NR33
+  MEM[I] = J
+
+  'Set frequency:
+  f3 = (MEM[#NR34]<<8)+J
+
+RETURN
+
+
+@NR34
+  tmp = J AND &B111
+  MEM[I] = tmp
+
+  'If trigger bit is set...
+  IF J AND&H80 THEN
+    t3=1
+
+    'If consecutive bit is set...
+    IF J AND&H40 THEN le3 = 1 ELSE le3 = 0
+
+    'Set wave
+    WAVSET 226,127,127,127,127,WAV_RAM$*8,81
+
+  ENDIF
+
+  'Set frequency
+  f3 = (tmp<<8)+MEM[#NR33]
+
+RETURN
+
+
+@FF30 @FF38
+@FF31 @FF39
+@FF32 @FF3A
+@FF33 @FF3B
+@FF34 @FF3C
+@FF35 @FF3D
+@FF36 @FF3E
+@FF37 @FF3F
+  MEM[I] = J
+
+  'Update wave:
+  wav_ram$[4*(I-&HFF30)  ]=HEX$((J AND&HF0)>>>4,1)
+  wav_ram$[4*(I-&HFF30)+1]=HEX$((J AND&HF0)>>>4,1)
+  wav_ram$[4*(I-&HFF30)+2]=HEX$((J AND&H0F),    1)
+  wav_ram$[4*(I-&HFF30)+3]=HEX$((J AND&H0F),    1)
+
+'  'Set wave
+'  WAVSET 226,127,127,127,127,WAV_RAM$*8,81
+
+  'TODO
+  'Needs optimization
+
+RETURN
+
+
+' -- Channel 4: Noise --
+
+' -- UNFINISHED
+'TODO
+
+
+' -- APU global --
+@NR50
+  MEM[I] = J
+'    vl#=(J AND&H70)*1.25
+    vl# = vlv#[J]
+'    vr#=(J AND&H07)*20
+    vr# = vrv#[J]
+RETURN
+
+@NR51
+  MEM[I] = J
+  IF J AND&H80THEN v4l=1 ELSE v4l=0
+  IF J AND&H40THEN v3l=1 ELSE v3l=0
+  IF J AND&H20THEN v2l=1 ELSE v2l=0
+  IF J AND&H10THEN v1l=1 ELSE v1l=0
+
+  IF J AND&H08THEN v4r=1 ELSE v4r=0
+  IF J AND&H04THEN v3r=1 ELSE v3r=0
+  IF J AND&H02THEN v2r=1 ELSE v2r=0
+  IF J AND&H01THEN v1r=1 ELSE v1r=0
+RETURN
+
+@NR52
+  MEM[I] = J
+  IF J AND&H80 THEN
+    apu_pwr=1
+'    t1=1:t2=1:t3=1
+  ELSE
+    apu_pwr=0
+'    BGMSTOP
+    'BGMVOL 0,0:BGMVOL 1,0:BGMVOL 2,0
+  ENDIF
+RETURN
+
+'***********
+'* APU end *
+'***********
+
+'-----------------------------------
+
+
+
+'*********
+'* Timer *
+'*********
+
+@DIV
+  'Writing resets divider
+  MEM[I] = 0
+RETURN
+
+@TAC
+  MEM[I] = J AND 7
+RETURN
+
+'*************
+'* Timer end *
+'*************
+
+'-----------------------------------
+
+
+
+'********
+'* Misc *
+'********
+
+'Unload bootrom after bootup sequence
+@FF50
+  MEM[I] = J
+
+  'Save state for faster loading
+  IF use_BOOTROM AND J THEN
+    IF use_init_state THEN
+      save_init_state
+      use_init_state = 0
+    ENDIF
+
+    unload_bootrom
+
+  ENDIF
+  RETURN
+
+@P1
+  MEM[#P1] = J AND &H30
+  tmp=BUTTON(0)AND &HFF
+
+'Get directional inputs
+  IF MEM[#P1]AND&H10THEN
+    MEM[#P1] = JOYP0[tmp]
+    RETURN
+
+'Get button inputs
+  ELSEIF MEM[#P1]AND&H20THEN
+    MEM[#P1] = JOYP1[tmp]
+    RETURN
+
+  ENDIF
+  RETURN
+
+@END
+END
+
+'TODO
+'  Quite a rough way of switching
+'  RAM banks, but sufficient atm
+DEF ERAM_bank_switch
+
+  'Do nothing if already in address space
+  IF ERAM_bank==prev_ERAM_bank THEN RETURN
+
+  'Copy current RAM page back into ERAM
+  COPY \
+    ERAM,\
+    (prev_ERAM_bank*&H2000)AND LAST(ERAM),\
+    MEM,&HA000,\
+    &H2000
+
+  'Copy new RAM page into address space
+  COPY \
+    MEM,\
+    &HA000,\
+    ERAM,\
+    (ERAM_bank*&H2000)AND LAST(ERAM),\
+    &H2000
+
+  'For optimization
+  prev_ERAM_bank = ERAM_bank
+
+END
+
+
+DEF LCDC J
+  IF   J    AND 1 THEN
+    TSHOW 1
+    BG_on = 1
+  ELSE
+    THIDE 1
+    BG_on = 0
+  ENDIF
+
+  IF (J>>>1)AND 1 THEN
+    FOR I=0 TO 39
+      SPSHOW I
+      SPSHOW I+40
+    NEXT
+  ELSE
+    FOR I=0 TO 39
+      SPHIDE I
+      SPHIDE I+40
+    NEXT
+  ENDIF
+
+  IF (J>>>2)AND 1 THEN
+    sprite_size_16 = 1
+  ELSE
+    sprite_size_16 = 0
+  ENDIF
+
+  IF (J>>>3)AND 1 THEN
+    BG_tile_map = 1
+  ELSE
+    BG_tile_map = 0
+  ENDIF
+
+  IF (J>>>4)AND 1 THEN
+    BG_win_tile_data = 1
+  ELSE
+    BG_win_tile_data = 0
+  ENDIF
+
+  IF (J>>>5)AND 1 THEN
+    TSHOW 0
+    SPSHOW 100
+    win_on = 1
+  ELSE
+    THIDE 0
+    SPHIDE 100
+    win_on = 0
+  ENDIF
+
+  IF (J>>>6)AND 1 THEN
+    win_tile_map = 1
+  ELSE
+    win_tile_map = 0
+  ENDIF
+
+  IF (J>>>7)AND 1 THEN
+    PPU_on = 1
+  ELSE
+    PPU_on = 0
+    MEM[#LY] = 0
+    PPU_mode = 1
+    DMG_state0 = 0
+  ENDIF
+END
+
+
+
+
+DEF load_eram
+  LSAV
+END
+
+
+DEF save_state ' Compact
+  VAR I
+  
+  DIM MEM_comp[&H2000]
+  FOR I=0 TO &H1FFF
+    MEM_comp[I] = (MEM[(I*4)+&H8000]    )OR\
+                  (MEM[(I*4)+&H8001]<< 8)OR\
+                  (MEM[(I*4)+&H8002]<<16)OR\
+                  (MEM[(I*4)+&H8003]<<24)
+  NEXT
+  MEM2=MEM_comp
+  
+  VAR eram_len = LEN(eram)
+
+  FOR I=0 TO eram_len-1
+    PUSH MEM2,ERAM[I]
+  NEXT
+  PUSH MEM2,eram_len
+  
+  PUSH MEM2,DMG_PC
+  PUSH MEM2,DMG_PC
+  PUSH MEM2,DMG_SP
+  PUSH MEM2,DMG_A
+  PUSH MEM2,DMG_F
+  PUSH MEM2,DMG_B
+  PUSH MEM2,DMG_C
+  PUSH MEM2,DMG_D
+  PUSH MEM2,DMG_E
+  PUSH MEM2,DMG_H
+  PUSH MEM2,DMG_L
+  PUSH MEM2,DMG_INTF
+  PUSH MEM2,DMG_state0
+  
+  PUSH MEM2,ROM_bank
+  PUSH MEM2,prev_ROM_bank
+  PUSH MEM2,ERAM_bank
+  PUSH MEM2,prev_ERAM_bank
+  PUSH MEM2,eram_enbl
+  PUSH MEM2,ERAM_mode
+  
+  PUSH MEM2,PPU_mode
+  PUSH MEM2,PPU_on
+
+@SAVE
+  VAR st$ = "DAT:"+DIALOG(LEFT$(romfile$,LEN(romfile$)-3)+".ST","Save (format: DAT:*[.ST])",14)
+  IF RESULT()!=1 THEN RETURN
+  SAVEV st$,MEM_comp
+  IF RESULT()!=1\
+GOTO @SAVE
+
+END
+
+
+DEF save_init_state
+  VAR I
+  
+  MEM2=COPY(MEM,&H8000,&H8000)
+  
+  VAR eram_len = LEN(eram)
+  FOR I=0 TO eram_len-1
+    PUSH MEM2,eram[I]
+  NEXT
+  PUSH MEM2,eram_len
+  
+  PUSH MEM2,DMG_PC
+  PUSH MEM2,DMG_SP
+  PUSH MEM2,DMG_A
+  PUSH MEM2,DMG_F
+  PUSH MEM2,DMG_B
+  PUSH MEM2,DMG_C
+  PUSH MEM2,DMG_D
+  PUSH MEM2,DMG_E
+  PUSH MEM2,DMG_H
+  PUSH MEM2,DMG_L
+  PUSH MEM2,DMG_INTF
+  PUSH MEM2,DMG_state0
+  
+  PUSH MEM2,ROM_bank
+  PUSH MEM2,ERAM_bank
+  PUSH MEM2,prev_ERAM_bank
+  PUSH MEM2,eram_enbl
+  PUSH MEM2,ERAM_mode
+  
+  PUSH MEM2,PPU_mode
+  PUSH MEM2,PPU_on
+  
+  SAVEV "DAT:Z_INIT.ST",MEM2
+END
+
+
+DEF load_state ' Compact
+  VAR I
+
+@LOAD
+  VAR st$,p$
+  SELECT #ST OUT st$,p$
+  init_screen
+
+  IF st$=="-" THEN RETURN
+  st$="DAT:"+p$+"/"+st$
+'  VAR st$ = "DAT:"+DIALOG(LEFT$(romfile$,LEN(romfile$)-3)+".ST","Save (format: DAT:*[.ST])",14)
+'  IF RESULT()!=1 THEN RETURN
+  LOADV st$,MEM2
+  IF RESULT()!=1\
+GOTO @LOAD
+  
+  PPU_on     = POP(MEM2)
+  PPU_mode   = POP(MEM2)
+  
+  ERAM_mode  = POP(MEM2)
+  eram_enbl  = POP(MEM2)
+  prev_ERAM_bank = POP(MEM2)
+  ERAM_bank  = POP(MEM2)
+  prev_ROM_bank = POP(MEM2)
+  ROM_bank   = POP(MEM2)
+  
+  DMG_state0 = POP(MEM2)
+  DMG_INTF    = POP(MEM2)
+  DMG_L      = POP(MEM2)
+  DMG_H      = POP(MEM2)
+  DMG_E      = POP(MEM2)
+  DMG_D      = POP(MEM2)
+  DMG_C      = POP(MEM2)
+  DMG_B      = POP(MEM2)
+  DMG_F      = POP(MEM2)
+  DMG_A      = POP(MEM2)
+  DMG_SP     = POP(MEM2)
+  DMG_PC    = POP(MEM2)
+  tmp     = POP(MEM2)
+
+  VAR eram_len = POP(MEM2)
+  
+  RESIZE eram,eram_len
+  FOR I=0 TO eram_len-1
+    eram[I]= POP(MEM2)
+  NEXT
+  
+  DIM MEM_comp[&H2000]
+
+  COPY MEM_comp,MEM2,&H2000
+  FOR I=0 TO &H1FFF
+    MEM[(I*4)+&H8000]= MEM_comp[I]       AND 255
+    MEM[(I*4)+&H8001]=(MEM_comp[I]>>> 8) AND 255
+    MEM[(I*4)+&H8002]=(MEM_comp[I]>>>16) AND 255
+    MEM[(I*4)+&H8003]=(MEM_comp[I]>>>24) AND 255
+  NEXT
+
+'  ROM_bank_switch
+'  ERAM_bank_switch
+
+  FOR I=&H8000 TO &H9FFF:POKE I,MEM[I]:NEXT
+  FOR I=&HFE00 TO &HFE9F:POKE I,MEM[I]:NEXT
+  FOR I=&HFF00 TO &HFFFF:POKE I,MEM[I]:NEXT
+END
+
+
+
+DEF load_init_state
+  VAR I
+  LOADV "DAT:Z_INIT.ST",MEM2
+'  use_bootrom=0
+  
+  PPU_on     = POP(MEM2)
+  PPU_mode   = POP(MEM2)
+  
+  ERAM_mode  = POP(MEM2)
+  eram_enbl  = POP(MEM2)
+  prev_ERAM_bank = POP(MEM2)
+  ERAM_bank  = POP(MEM2)
+  ROM_bank   = POP(MEM2)
+  
+  DMG_state0 = POP(MEM2)
+  DMG_INTF   = POP(MEM2)
+  DMG_L      = POP(MEM2)
+  DMG_H      = POP(MEM2)
+  DMG_E      = POP(MEM2)
+  DMG_D      = POP(MEM2)
+  DMG_C      = POP(MEM2)
+  DMG_B      = POP(MEM2)
+  DMG_F      = POP(MEM2)
+  DMG_A      = POP(MEM2)
+  DMG_SP     = POP(MEM2)
+  DMG_PC    = POP(MEM2)
+  
+  DMG_PC=&H100
+  DMG_PC=&H100
+  USE_bootrom=0
+  unload_bootrom
+
+  VAR eram_len = POP(MEM2)
+  RESIZE eram,eram_len
+  FOR I=eram_len-1 TO 0
+    eram[I] = POP(MEM2)
+  NEXT
+  
+  COPY MEM,&H8000,MEM2,&H8000
+
+  FOR I=&H8000 TO &H9FFF:POKE I,MEM[I]:NEXT
+  FOR I=&HFE00 TO &HFE9F:POKE I,MEM[I]:NEXT
+END
+
+
+DEF unload_bootrom
+  USE_bootrom = #FALSE
+  COPY MEM,0,ROM_dirty,0,256
+END
+
+
+DEF reload_bootrom
+  USE_bootrom = #TRUE
+  FOR I=0 TO LAST(BOOTROM)
+    MEM[(I*4)  ]= BOOTROM[I]       AND 255
+    MEM[(I*4)+1]=(BOOTROM[I]>>> 8) AND 255
+    MEM[(I*4)+2]=(BOOTROM[I]>>>16) AND 255
+    MEM[(I*4)+3]=(BOOTROM[I]>>>24) AND 255
+  NEXT
+END
+
+
+DEF rom_init
+  VAR I,J,tmp
+
+  IF !ROM_loaded THEN
+    LOADV "DAT:BOOTROM",BOOTROM
+    LOADV "DAT:"+proj$+"/"+romfile$,ROM
+    ROM_loaded = #TRUE
+  ENDIF
+
+  ROM_size=LEN(ROM)*4
+  ROM_banks=ROM_size DIV &H4000
+  ROM_last_bank=ROM_banks-1
+
+  RESIZE ROM_dirty,ROM_size
+  RESIZE MEM,      ROM_size+&H10000
+
+  'Corruptor fun
+  IF #use_rom_corruptor THEN
+    RANDOMIZE 0,#corruptor_seed
+    FOR I=0 TO (LEN(ROM)/(256/#corruption_factor))-1
+      ROM[RND(LEN(ROM))]=RND(&HFFFFFFFF+1)
+    NEXT
+  ENDIF
+
+  FOR I=0 TO (&H8000 DIV 4)-1
+    MEM[(I*4)  ]= ROM[I]       AND 255
+    MEM[(I*4)+1]=(ROM[I]>>> 8) AND 255
+    MEM[(I*4)+2]=(ROM[I]>>>16) AND 255
+    MEM[(I*4)+3]=(ROM[I]>>>24) AND 255
+
+    ROM_dirty[(I*4)  ]= ROM[I]       AND 255
+    ROM_dirty[(I*4)+1]=(ROM[I]>>> 8) AND 255
+    ROM_dirty[(I*4)+2]=(ROM[I]>>>16) AND 255
+    ROM_dirty[(I*4)+3]=(ROM[I]>>>24) AND 255
+  NEXT
+
+  FOR I=(&H8000 DIV 4) TO LAST(ROM)
+    ROM_dirty[(I*4)  ]= ROM[I]       AND 255
+    ROM_dirty[(I*4)+1]=(ROM[I]>>> 8) AND 255
+    ROM_dirty[(I*4)+2]=(ROM[I]>>>16) AND 255
+    ROM_dirty[(I*4)+3]=(ROM[I]>>>24) AND 255
+  NEXT
+
+'**** TMP ****
+  IF use_BOOTROM THEN
+    FOR I=0 TO LAST(BOOTROM)
+      MEM[(I*4)  ]= BOOTROM[I]       AND 255
+      MEM[(I*4)+1]=(BOOTROM[I]>>> 8) AND 255
+      MEM[(I*4)+2]=(BOOTROM[I]>>>16) AND 255
+      MEM[(I*4)+3]=(BOOTROM[I]>>>24) AND 255
+    NEXT
+  ENDIF
+'****-*-*-****
+
+  cart_type = ROM_dirty[&H0147]
+  CASE cart_type
+  WHEN &H00:        '?"ROM ONLY
+  WHEN &H01:        '?"MBC1
+    MBC_type = 1
+  WHEN &H02:        '?"MBC1+RAM
+    MBC_type = 1
+    has_eram = 1
+  WHEN &H03:        '?"MBC1+RAM+BATTERY
+    MBC_type = 1
+    has_eram = 1
+    has_battery = 1
+    'BEEP'TMP
+  WHEN &H05:        '?"MBC2
+    MBC_type = 2
+  WHEN &H06:        '?"MBC2+BATTERY
+    MBC_type = 2
+    has_battery = 1
+  WHEN &H08:        '?"ROM+RAM
+  WHEN &H09:        '?"ROM+RAM+BATTERY
+  WHEN &H0B:        '?"MM01
+  WHEN &H0C:        '?"MM01+RAM
+  WHEN &H0D:        '?"MM01+RAM+BATTERY
+  WHEN &H0F:        '?"MBC3+TIMER+BATTERY
+    MBC_type = 6
+    has_battery = 1
+  WHEN &H10:        '?"MBC3+TIMER+RAM+BATTERY
+    MBC_type = 6
+    has_eram = 1
+    has_battery = 1
+  WHEN &H11:        '?"MBC3
+    MBC_type = 3
+  WHEN &H12:        '?"MBC3+RAM
+    MBC_type = 3
+    has_eram = 1
+  WHEN &H13:        '?"MBC3+RAM+BATTERY
+    MBC_type = 3
+    has_eram = 1
+    has_battery = 1
+  WHEN &H15:        '?"MBC4 '?
+  WHEN &H16:        '?"?1
+  WHEN &H17:        '?"?2
+    MBC_type = 4
+  WHEN &H19:        '?"MBC5
+    MBC_type = 5
+  WHEN &H1A:        '?"MBC5+RAM
+    MBC_type = 5
+    has_eram = 1
+  WHEN &H1B:        '?"MBC5+RAM+BATTERY
+    MBC_type = 5
+    has_eram = 1
+    has_battery = 1
+  WHEN &H1C:        '?"MBC5+RUMBLE
+    MBC_type = 5
+  WHEN &H1D:        '?"MBC5+RUMBLE+RAM
+    MBC_type = 5
+    has_eram = 1
+  WHEN &H1E:        '?"MBC5+RUMBLE+RAM+BATTERY
+    MBC_type = 5
+    has_eram = 1
+    has_battery = 1
+  WHEN &H20:        '?"MBC6
+    MBC_type = 6
+  WHEN &H22:        '?"MBC7+SENSOR+RUMBLE+RAM+BATTERY
+    MBC_type = 7
+    has_eram = 1
+    has_battery = 1
+  WHEN &HFC:        '?"POCKET CAMERA/GAMEBOY CAMERA
+'    MBC_type = &HFC
+    MBC_type = 8
+  WHEN &HFF:        '?"HuC1+RAM+BATTERY
+    MBC_type = 1
+  OTHERWISE:
+    MBC_type = 0    '?FORMAT$("UNKNOWN MAPPER: %X", cart_type)
+  ENDCASE
+  
+  '********
+  '* TMP  *
+  '********
+    'ROM_size = &H8000<<ROM_dirty[&H0148]
+    'ERAM_size = ROM_dirty[&H0149]
+    'CASE ERAM_size
+    'WHEN &H00:
+      'ERAM_size = &H00000
+    'WHEN &H01:
+      'ERAM_size = &H00800
+    'WHEN &H02:
+      'ERAM_size = &H02000
+    'WHEN &H03:
+      'ERAM_size = &H08000
+    'WHEN &H04:
+      'ERAM_size = &H20000
+    'WHEN &H05:
+      'ERAM_size = &H10000
+    'ENDCASE
+  '********
+  
+  '********
+  '* TMP  *
+  '********
+'    ERAM_size=16*&H2000
+    ERAM_size=&H20000
+    ERAM_banks=ERAM_size DIV &H2000
+    ERAM_last_bank=ERAM_banks-1
+  '********
+  RESIZE MEM,LEN(MEM)+ERAM_size
+
+  IF MBC_type != 2 THEN
+'    IF has_RTC THEN
+'      RESIZE ERAM,ERAM_size+48
+'    ELSE
+      RESIZE ERAM,ERAM_size'*2
+'    ENDIF
+  ENDIF
+END
+
+
+DEF SSAV
+@SSAV
+  VAR sat$ = "DAT:"+DIALOG(LEFT$(romfile$,LEN(romfile$)-3)+".SAV","Save .SAV file",14)
+  IF RESULT()!=1 THEN RETURN
+  DIM ERAM_comp[0]
+
+  GOTO@SAVESAV
+
+@SAVESAV_END
+  RETURN
+
+@SAVESAV
+RESIZE ERAM_comp,LEN(ERAM)DIV 4
+  ERAM_bank_switch
+    FOR I=0 TO LAST(ERAM_comp)
+    ERAM_comp[I] = (ERAM[(I*4)  ]    )OR\
+                   (ERAM[(I*4)+1]<< 8)OR\
+                   (ERAM[(I*4)+2]<<16)OR\
+                   (ERAM[(I*4)+3]<<24)
+    NEXT
+  SAVEV sat$,ERAM_comp
+  IF RESULT()!=1\
+GOTO@SSAV
+  GOTO@SAVESAV_END
+END
+
+
+DEF LSAV
+@LSAV
+  VAR st$,p$
+  SELECT #SAV OUT st$,p$
+  init_screen
+
+  IF st$=="-" THEN RETURN
+  st$="DAT:"+p$+"/"+st$
+'  DIALOG st$
+
+'  VAR st$ = "DAT:"+DIALOG(LEFT$(romfile$,LEN(romfile$)-3)+".SAV","Load .SAV file",14)
+'  IF RESULT()!=1 THEN RETURN
+  DIM ERAM_compact[0]
+
+  GOTO @LOADSAV
+
+@LOADSAV_END
+'  DMG_PC = 256
+  RETURN
+
+@LOADSAV
+  LOADV st$,ERAM_compact
+  IF RESULT()!=1\
+GOTO @LSAV
+RESIZE ERAM,LEN(ERAM_compact)*4
+    FOR I=0 TO LAST(ERAM_compact)
+      ERAM[(I*4)  ]= ERAM_compact[I]       AND 255
+      ERAM[(I*4)+1]=(ERAM_compact[I]>>> 8) AND 255
+      ERAM[(I*4)+2]=(ERAM_compact[I]>>>16) AND 255
+      ERAM[(I*4)+3]=(ERAM_compact[I]>>>24) AND 255
+    NEXT
+  ERAM_bank_switch
+  GOTO @LOADSAV_END
+END
+
+
+
+
+'********************
+'** ENTRY POINT    **
+'********************
+@START
+CALL "setup"
+GOTO @START
+
+
+'******************************************
+'* Initial setup
+'******************************************
+DEF setup
+  VAR ret
+
+
+'  ?"Preparing";
+
+  rom_init':?".";
+  init_screen':?".";
+
+  IF enbl_audio THEN
+    init_tones':?".";
+    init_wav_ram':?".";
+    init_APU':?".";
+  ENDIF
+
+  table_init':?".";
+  DMG_reset':?".";
+
+  IF use_init_state THEN
+    IF DMG_PC == 0 AND CHKFILE("DAT:Z_INIT.ST") THEN
+      load_init_state':?".";
+      use_init_state = 0
+    ENDIF
+  ENDIF
+
+  load_eram':?".";
+
+'  ?"DONE"
+
+  ON BREAK GOTO @MENU
+
+'  load_state
+  DMG_emu -1
+END
+
+DEF init_screen
+'  ACLS
+
+  XSCREEN 640,360,2
+  TSCREEN 16,8
+
+  TSCREEN 3,8,8',160,90
+  TOFS 3,1,1,-2
+  TLAYER 3,1
+
+
+  TSCREEN #win_screen,8,8,64,64
+  TSCALE #win_screen,2,2
+  TOFS #win_screen,0,0,-1024'?
+
+  SPSET 100,0,0,256,256
+  SPPAGE 100,3
+  GTARGET 3
+  GFILL 0,0,255,255,pal[3]OR&HFF000000
+  SPSCALE 100,2,2
+
+  TLAYER #win_screen,#win_layer
+  SPLAYER 100,#win_layer
+
+
+  TSCREEN #bg_screen,8,8,64,64
+  TLAYER #bg_screen,#bg_layer
+  TSCALE #bg_screen,1,.5
+
+  TSCREEN 2,16,8,128,128
+  IF     #scale==1 THEN
+    TSCALE 2,2,2
+  ELSEIF #scale==2 THEN
+    TSCALE 2,2,2
+  ELSEIF #scale==3 THEN
+    TOFS 2,0,-6,-1
+    TSCALE 2,2,2
+  ELSEIF #scale==4 THEN
+    TOFS 2,0,-6,-1
+    TSCALE 2,2,2
+  ELSEIF #scale==5 THEN
+    TOFS 2,-80,-60,-1
+    TSCALE 2,2.5,2.5
+  ENDIF
+  TLAYER 2,2
+
+
+  SPLAYER #GSPRITE,3
+
+  SPSET 101,0,0,256,256
+  SPPAGE 101,0
+  SPLAYER 101,#bg_layer
+  SPOFS 101,0,0,-1024
+
+  GTARGET 1
+  GFILL 0,0,640,360,&H7F00003F
+  SPSET 102,0,0,640,360
+  SPPAGE 102,1
+  SPLAYER 102,1
+  SPHIDE 102
+  GTARGET 0
+
+  SPLAYER #sp_layer
+  LMATRIX #sp_layer,0,-3,0,0,2,2
+
+  BACKCOLOR PAL[3]
+  COLOR #C_YELLOW
+  TCOLOR 3,#C_YELLOW
+
+
+  SPSET 103,0,0,640,360
+  SPPAGE 103,2
+  SPLAYER 103,0
+
+  VRAM_gfx=GARRAY(4)
+  VRAM_bg =TARRAY(#bg_screen)
+  VRAM_win=TARRAY(#win_screen)
+
+  tilemap0$=((CHR$(&H9800)*32)+CHR$(10))*32
+  tilemap1$=((CHR$(&H9800)*32)+CHR$(10))*32
+
+  tilemap_init
+  OBJ_init
+
+END
+
+
+
+REM"******************************
+REM'******************************
+REM ****  MAIN EMULATOR LOOP  ****
+REM'****  aka this is where   ****
+REM"**** all the fun happens  ****
+
+DEF DMG_emu steps
+  VAR opcode,opcode_CB
+  VAR offset
+  VAR istate=0
+  VAR I, J, K, J_H, J_L
+  VAR BC,DE,HL
+  VAR VDE, VHL
+  VAR reg
+  VAR update
+  VAR total_state
+
+  LOOP
+    REPEAT
+@emu_loop:
+      opcode = MEM[DMG_PC]
+
+      DMG_PC=DMG_PC+1
+
+      DMG_state0=DMG_state0+state_table[opcode]
+
+
+
+'      PERFBEGIN 0 'opcode execution measure
+  ON opcode GOTO \
+\'   x0          x1         x2          x3         x4        x5        x6         x7        x8         x9         xA         xB         xC        xD        xE         xF
+    @NOP,       @LD_BC_16, @LD_xBC_A,  @INC_BC,   @INC_B,   @DEC_B,   @LD_B_8,   @RLCA,    @LD_x16_SP,@ADD_HL_BC,@LD_A_xBC, @DEC_BC,   @INC_C,   @DEC_C,   @LD_C_8,   @RRCA,\   '0x
+    @STOP,      @LD_DE_16, @LD_xDE_A,  @INC_DE,   @INC_D,   @DEC_D,   @LD_D_8,   @RLA,     @JR,       @ADD_HL_DE,@LD_A_xDE, @DEC_DE,   @INC_E,   @DEC_E,   @LD_E_8,   @RRA, \   '1x
+    @JR_NZ,     @LD_HL_16, @LDI_xHL_A, @INC_HL,   @INC_H,   @DEC_H,   @LD_H_8,   @DAA,     @JR_Z,     @ADD_HL_HL,@LDI_A_xHL,@DEC_HL,   @INC_L,   @DEC_L,   @LD_L_8,   @CPL, \   '2x
+    @JR_NC,     @LD_SP_16, @LDD_xHL_A, @INC_SP,   @INC_xHL, @DEC_xHL, @LD_xHL_8, @SCF,     @JR_C,     @ADD_HL_SP,@LDD_A_xHL,@DEC_SP,   @INC_A,   @DEC_A,   @LD_A_8,   @CCF, \   '3x
+    @LD_B_B,    @LD_B_C,   @LD_B_D,    @LD_B_E,   @LD_B_H,  @LD_B_L,  @LD_B_xHL, @LD_B_A,  @LD_C_B,   @LD_C_C,   @LD_C_D,   @LD_C_E,   @LD_C_H,  @LD_C_L,  @LD_C_xHL, @LD_C_A,\ '4x
+    @LD_D_B,    @LD_D_C,   @LD_D_D,    @LD_D_E,   @LD_D_H,  @LD_D_L,  @LD_D_xHL, @LD_D_A,  @LD_E_B,   @LD_E_C,   @LD_E_D,   @LD_E_E,   @LD_E_H,  @LD_E_L,  @LD_E_xHL, @LD_E_A,\ '5x
+    @LD_H_B,    @LD_H_C,   @LD_H_D,    @LD_H_E,   @LD_H_H,  @LD_H_L,  @LD_H_xHL, @LD_H_A,  @LD_L_B,   @LD_L_C,   @LD_L_D,   @LD_L_E,   @LD_L_H,  @LD_L_L,  @LD_L_xHL, @LD_L_A,\ '6x
+    @LD_xHL_B,  @LD_xHL_C, @LD_xHL_D,  @LD_xHL_E, @LD_xHL_H,@LD_xHL_L,@HALT,     @LD_xHL_A,@LD_A_B,   @LD_A_C,   @LD_A_D,   @LD_A_E,   @LD_A_H,  @LD_A_L,  @LD_A_xHL, @LD_A_A,\ '7x
+    @ADD_A_B,   @ADD_A_C,  @ADD_A_D,   @ADD_A_E,  @ADD_A_H, @ADD_A_L, @ADD_A_xHL,@ADD_A_A, @ADC_A_B,  @ADC_A_C,  @ADC_A_D,  @ADC_A_E,  @ADC_A_H, @ADC_A_L, @ADC_A_xHL,@ADC_A_A,\'8x
+    @SUB_B,     @SUB_C,    @SUB_D,     @SUB_E,    @SUB_H,   @SUB_L,   @SUB_xHL,  @SUB_A,   @SBC_A_B,  @SBC_A_C,  @SBC_A_D,  @SBC_A_E,  @SBC_A_H, @SBC_A_L, @SBC_A_xHL,@SBC_A_A,\'9x
+    @AND_B,     @AND_C,    @AND_D,     @AND_E,    @AND_H,   @AND_L,   @AND_xHL,  @AND_A,   @XOR_B,    @XOR_C,    @XOR_D,    @XOR_E,    @XOR_H,   @XOR_L,   @XOR_xHL,  @XOR_A,\  'Ax
+    @OR_B,      @OR_C,     @OR_D,      @OR_E,     @OR_H,    @OR_L,    @OR_xHL,   @OR_A,    @CP_B,     @CP_C,     @CP_D,     @CP_E,     @CP_H,    @CP_L,    @CP_xHL,   @CP_A,\   'Bx
+    @RET_NZ,    @POP_BC,   @JP_NZ,     @JP,       @CALL_NZ, @PUSH_BC, @ADD_A_8,  @RST00,   @RET_Z,    @RET,      @JP_Z,     @PFX_CB,   @CALL_Z,  @CALL,    @ADC_A_8,  @RST08,\  'Cx
+    @RET_NC,    @POP_DE,   @JP_NC,     @UNV,      @CALL_NC, @PUSH_DE, @SUB_8,    @RST10,   @RET_C,    @RETI,     @JP_C,     @UNV,      @CALL_C,  @UNV,     @SBC_A_8,  @RST18,\  'Dx
+    @LD_xFF_8_A,@POP_HL,   @LD_xFF_C_A,@UNV,      @UNV,     @PUSH_HL, @AND_8,    @RST20,   @ADD_SP_R8,@JP_xHL,   @LD_x16_A, @UNV,      @UNV,     @UNV,     @XOR_8,    @RST28,\  'Ex
+    @LD_A_xFF_8,@POP_AF,   @LD_A_xFF_C,@DI,       @UNV,     @PUSH_AF, @OR_8,     @RST30,   @LD_HL_SP, @LD_SP_HL, @LD_A_x16, @EI,       @UNV,     @UNV,     @CP_8,     @RST38    'Fx
+
+@UNV
+  ?FORMAT$("0x%4X: Invalid opcode: 0x%2X",DMG_PC,OPCODE)
+  goto @decode_end
+
+
+' * 8ビット転送命令 *
+
+'@LD_A_A:   DMG_A=DMG_A: goto @decode_end
+@LD_A_A:   goto @decode_end
+@LD_A_B:   DMG_A=DMG_B: goto @decode_end
+@LD_A_C:   DMG_A=DMG_C: goto @decode_end
+@LD_A_D:   DMG_A=DMG_D: goto @decode_end
+@LD_A_E:   DMG_A=DMG_E: goto @decode_end
+@LD_A_H:   DMG_A=DMG_H: goto @decode_end
+@LD_A_L:   DMG_A=DMG_L: goto @decode_end
+@LD_A_xHL: DMG_A=PEEK((DMG_H<<8)+DMG_L)
+           goto @decode_end
+@LD_A_8:   DMG_A=MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+           goto @decode_end
+
+@LD_B_A:   DMG_B=DMG_A: goto @decode_end
+'@LD_B_B:   DMG_B=DMG_B: goto @decode_end
+@LD_B_B:   goto @decode_end
+@LD_B_C:   DMG_B=DMG_C: goto @decode_end
+@LD_B_D:   DMG_B=DMG_D: goto @decode_end
+@LD_B_E:   DMG_B=DMG_E: goto @decode_end
+@LD_B_H:   DMG_B=DMG_H: goto @decode_end
+@LD_B_L:   DMG_B=DMG_L: goto @decode_end
+@LD_B_xHL: DMG_B=PEEK((DMG_H<<8)+DMG_L):
+           goto @decode_end
+@LD_B_8:   DMG_B=MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+           goto @decode_end
+
+@LD_C_A:   DMG_C=DMG_A: goto @decode_end
+@LD_C_B:   DMG_C=DMG_B: goto @decode_end
+'@LD_C_C:   DMG_C=DMG_C: goto @decode_end
+@LD_C_C:   goto @decode_end
+@LD_C_D:   DMG_C=DMG_D: goto @decode_end
+@LD_C_E:   DMG_C=DMG_E: goto @decode_end
+@LD_C_H:   DMG_C=DMG_H: goto @decode_end
+@LD_C_L:   DMG_C=DMG_L: goto @decode_end
+@LD_C_xHL: DMG_C=PEEK((DMG_H<<8)+DMG_L):
+           goto @decode_end
+@LD_C_8:   DMG_C=MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+           goto @decode_end
+
+@LD_D_A:   DMG_D=DMG_A: goto @decode_end
+@LD_D_B:   DMG_D=DMG_B: goto @decode_end
+@LD_D_C:   DMG_D=DMG_C: goto @decode_end
+'@LD_D_D:   DMG_D=DMG_D: goto @decode_end
+@LD_D_D:   goto @decode_end
+@LD_D_E:   DMG_D=DMG_E: goto @decode_end
+@LD_D_H:   DMG_D=DMG_H: goto @decode_end
+@LD_D_L:   DMG_D=DMG_L: goto @decode_end
+@LD_D_xHL: DMG_D=PEEK((DMG_H<<8)+DMG_L):
+           goto @decode_end
+@LD_D_8:   DMG_D=MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+           goto @decode_end
+
+@LD_E_A:   DMG_E=DMG_A: goto @decode_end
+@LD_E_B:   DMG_E=DMG_B: goto @decode_end
+@LD_E_C:   DMG_E=DMG_C: goto @decode_end
+@LD_E_D:   DMG_E=DMG_D: goto @decode_end
+'@LD_E_E:   DMG_E=DMG_E: goto @decode_end
+@LD_E_E:   goto @decode_end
+@LD_E_H:   DMG_E=DMG_H: goto @decode_end
+@LD_E_L:   DMG_E=DMG_L: goto @decode_end
+@LD_E_xHL: DMG_E=PEEK((DMG_H<<8)+DMG_L):
+           goto @decode_end
+@LD_E_8:   DMG_E=MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+           goto @decode_end
+
+@LD_H_A:   DMG_H=DMG_A: goto @decode_end
+@LD_H_B:   DMG_H=DMG_B: goto @decode_end
+@LD_H_C:   DMG_H=DMG_C: goto @decode_end
+@LD_H_D:   DMG_H=DMG_D: goto @decode_end
+@LD_H_E:   DMG_H=DMG_E: goto @decode_end
+'@LD_H_H:   DMG_H=DMG_H: goto @decode_end
+@LD_H_H:   goto @decode_end
+@LD_H_L:   DMG_H=DMG_L: goto @decode_end
+@LD_H_xHL: DMG_H=PEEK((DMG_H<<8)+DMG_L):
+           goto @decode_end
+@LD_H_8:   DMG_H=MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+           goto @decode_end
+
+@LD_L_A:   DMG_L=DMG_A: goto @decode_end
+@LD_L_B:   DMG_L=DMG_B: goto @decode_end
+@LD_L_C:   DMG_L=DMG_C: goto @decode_end
+@LD_L_D:   DMG_L=DMG_D: goto @decode_end
+@LD_L_E:   DMG_L=DMG_E: goto @decode_end
+@LD_L_H:   DMG_L=DMG_H: goto @decode_end
+'@LD_L_L:   DMG_L=DMG_L: goto @decode_end
+@LD_L_L:   goto @decode_end
+@LD_L_xHL: DMG_L=PEEK((DMG_H<<8)+DMG_L):
+           goto @decode_end
+@LD_L_8:   DMG_L=MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+           goto @decode_end
+
+@LD_xHL_A:
+  I = (DMG_H<<8)+DMG_L:
+  J = DMG_A
+  goto @POKE_I_J_decode_end
+
+@LDI_xHL_A:
+  I = (DMG_H<<8)+DMG_L:
+  HL=I+1:
+  DMG_H=(HL>>>8)AND 255 : DMG_L=HL AND 255:
+  J = DMG_A
+  goto @POKE_I_J_decode_end
+
+@LDI_A_xHL
+  I=(DMG_H<<8)+DMG_L
+  DMG_A=PEEK(I):
+  HL=I+1:
+  DMG_H=(HL>>>8)AND 255 : DMG_L=HL AND 255:
+  goto @decode_end
+
+@LDD_xHL_A:
+  I = (DMG_H<<8)+DMG_L:
+  HL=I-1:
+  DMG_H=(HL>>>8)AND 255 : DMG_L=HL AND 255:
+  J = DMG_A
+  goto @POKE_I_J_decode_end
+
+@LDD_A_xHL
+  I=(DMG_H<<8)+DMG_L
+  DMG_A=PEEK(I):
+  HL=I-1:
+  DMG_H=(HL>>>8)AND 255 : DMG_L=HL AND 255:
+  goto @decode_end
+
+@LD_xHL_B:
+  I = (DMG_H<<8)+DMG_L:
+  J = DMG_B
+  goto @POKE_I_J_decode_end
+
+@LD_xHL_C:
+  I = (DMG_H<<8)+DMG_L:
+  J = DMG_C
+  goto @POKE_I_J_decode_end
+
+@LD_xHL_D:
+  I = (DMG_H<<8)+DMG_L:
+  J = DMG_D
+  goto @POKE_I_J_decode_end
+
+@LD_xHL_E:
+  I = (DMG_H<<8)+DMG_L:
+  J = DMG_E
+  goto @POKE_I_J_decode_end
+
+@LD_xHL_H:
+  I = (DMG_H<<8)+DMG_L:
+  J = DMG_H
+  goto @POKE_I_J_decode_end
+
+@LD_xHL_L:
+  I = (DMG_H<<8)+DMG_L:
+  J = DMG_L
+  goto @POKE_I_J_decode_end
+
+@LD_xHL_8:
+  I = (DMG_H<<8)+DMG_L:
+  J = MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+  goto @POKE_I_J_decode_end
+
+@LD_A_xBC: DMG_A=PEEK((DMG_B<<8)+DMG_C):
+  goto @decode_end
+@LD_A_xDE: DMG_A=PEEK((DMG_D<<8)+DMG_E):
+  goto @decode_end
+@LD_A_x16:
+  DMG_A=PEEK((MEM[DMG_PC+1]<<8)+MEM[DMG_PC])
+  DMG_PC=DMG_PC+2: goto @decode_end
+
+@LD_xBC_A:
+  I = (DMG_B<<8)+DMG_C:
+  J = DMG_A
+  goto @POKE_I_J_decode_end
+
+@LD_xDE_A:
+  I = (DMG_D<<8)+DMG_E:
+  J = DMG_A
+  goto @POKE_I_J_decode_end
+
+@LD_x16_A:
+  I = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: DMG_PC=DMG_PC+2:
+  J = DMG_A
+  goto @POKE_I_J_decode_end
+
+@LD_xFF_8_A:
+  I = &HFF00+MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+  J = DMG_A
+  goto @POKE_I_J_decode_end
+
+'@LD_xFF_8_A:
+  POKE_IO MEM[DMG_PC],DMG_A: DMG_PC=DMG_PC+1:
+  goto @decode_end
+
+@LD_A_xFF_8:
+  DMG_A=PEEK(&HFF00+MEM[DMG_PC])
+  DMG_PC=DMG_PC+1: goto @decode_end
+
+@LD_xFF_C_A:
+  I = &HFF00+DMG_C:
+  J = DMG_A
+  goto @POKE_I_J_decode_end
+
+'@LD_xFF_C_A:
+  POKE_IO DMG_C,DMG_A
+  goto @decode_end
+
+@LD_A_xFF_C:
+  DMG_A=PEEK(&HFF00+DMG_C)
+  goto @decode_end
+
+
+
+' * 16ビット転送命令 *
+
+@LD_BC_16:
+  DMG_B=MEM[DMG_PC+1]: DMG_C=MEM[DMG_PC]:
+  DMG_PC=DMG_PC+2: goto @decode_end
+@LD_DE_16:
+  DMG_D=MEM[DMG_PC+1]: DMG_E=MEM[DMG_PC]:
+  DMG_PC=DMG_PC+2: goto @decode_end
+@LD_HL_16:
+  DMG_H=MEM[DMG_PC+1]: DMG_L=MEM[DMG_PC]:
+  DMG_PC=DMG_PC+2: goto @decode_end
+@LD_SP_16:
+  DMG_SP=(MEM[DMG_PC+1]<<8)+MEM[DMG_PC]:
+  DMG_PC=DMG_PC+2: goto @decode_end
+
+@LD_SP_HL: DMG_SP=(DMG_H<<8)+DMG_L:
+  goto @decode_end
+
+
+'   F8
+' - ld hl, sp + r8
+@LD_HL_SP:
+  I=MEM[DMG_PC]: DMG_PC=DMG_PC+1
+  tmp=DMG_SP AND&HFF
+  J=DMG_SP+SGN8M_table[I]
+  DMG_F=ADD_table[(tmp<<8)+I]AND&H3F
+  DMG_H=(J>>>8)AND 255
+  DMG_L=J AND 255
+  goto @decode_end
+
+@LD_x16_HL:
+  J = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: DMG_PC=DMG_PC+2
+  POKE J+1, DMG_H
+  POKE J,   DMG_L
+  goto @decode_end
+
+@LD_x16_SP:
+  J = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: DMG_PC=DMG_PC+2
+  POKE J+1, DMG_SP>>>8
+  POKE J,   DMG_SP AND 255
+  goto @decode_end
+
+@LD_HL_x16:
+  J = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: DMG_PC=DMG_PC+2
+  DMG_H=PEEK(J+1): DMG_L=PEEK(J): goto @decode_end
+
+'@PUSH_BC:
+  DMG_SP = (DMG_SP-1)AND&HFFFF
+  POKE DMG_SP,DMG_B
+  DMG_SP = (DMG_SP-1)AND&HFFFF
+  POKE DMG_SP,DMG_C
+  goto @decode_end
+
+@PUSH_BC:
+  POKE DMG_SP-1,DMG_B
+  POKE DMG_SP-2,DMG_C
+  DMG_SP = (DMG_SP-2)AND&HFFFF
+  goto @decode_end
+
+'@PUSH_DE:
+  DMG_SP = (DMG_SP-1)AND&HFFFF
+  POKE DMG_SP,DMG_D
+  DMG_SP = (DMG_SP-1)AND&HFFFF
+  POKE DMG_SP,DMG_E
+  goto @decode_end
+
+@PUSH_DE:
+  POKE DMG_SP-1,DMG_D
+  POKE DMG_SP-2,DMG_E
+  DMG_SP = (DMG_SP-2)AND&HFFFF
+  goto @decode_end
+
+'@PUSH_HL:
+  DMG_SP = (DMG_SP-1)AND&HFFFF
+  POKE DMG_SP,DMG_H
+  DMG_SP = (DMG_SP-1)AND&HFFFF
+  POKE DMG_SP,DMG_L
+  goto @decode_end
+
+@PUSH_HL:
+  POKE DMG_SP-1,DMG_H
+  POKE DMG_SP-2,DMG_L
+  DMG_SP = (DMG_SP-2)AND&HFFFF
+  goto @decode_end
+
+'@PUSH_AF:
+  DMG_SP = (DMG_SP-1)AND&HFFFF
+  POKE DMG_SP,DMG_A
+  DMG_SP = (DMG_SP-1)AND&HFFFF
+  POKE DMG_SP,DMG_F
+  goto @decode_end
+
+@PUSH_AF:
+  POKE DMG_SP-1,DMG_A
+  POKE DMG_SP-2,DMG_F
+  DMG_SP = (DMG_SP-2)AND&HFFFF
+  goto @decode_end
+
+@POP_BC:
+  DMG_B=PEEK(DMG_SP+1): DMG_C=PEEK(DMG_SP):
+  DMG_SP = (DMG_SP+2)AND 65535: goto @decode_end
+@POP_DE:
+  DMG_D=PEEK(DMG_SP+1): DMG_E=PEEK(DMG_SP):
+  DMG_SP = (DMG_SP+2)AND 65535: goto @decode_end
+@POP_HL:
+  DMG_H=PEEK(DMG_SP+1): DMG_L=PEEK(DMG_SP):
+  DMG_SP = (DMG_SP+2)AND 65535: goto @decode_end
+@POP_AF:
+  DMG_A=PEEK(DMG_SP+1): DMG_F=PEEK(DMG_SP)AND &HF0:
+  DMG_SP = (DMG_SP+2)AND 65535: goto @decode_end
+
+
+' * 8ビット算術論理演算命令 *
+
+@ADD_A_A:' reg = DMG_A: goto @M_ADD_A
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_A]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+@ADD_A_B:' reg = DMG_B: goto @M_ADD_A
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_B]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+@ADD_A_C:' reg = DMG_C: goto @M_ADD_A
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_C]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+@ADD_A_D:' reg = DMG_D: goto @M_ADD_A
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_D]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+@ADD_A_E:' reg = DMG_E: goto @M_ADD_A
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_E]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+@ADD_A_H:' reg = DMG_H: goto @M_ADD_A
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_H]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+@ADD_A_L:' reg = DMG_L: goto @M_ADD_A
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_L]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+@ADD_A_xHL:'reg = PEEK((DMG_H<<8)+DMG_L): goto @M_ADD_A
+    DMG_A=ADD_table[(DMG_A<<8)+PEEK((DMG_H<<8)+DMG_L)]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+@ADD_A_8: 'reg = MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+          'goto @M_ADD_A
+    DMG_A=ADD_table[(DMG_A<<8)+MEM[DMG_PC]]
+    DMG_PC=DMG_PC+1
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+
+@ADC_A_A:' reg = DMG_A: goto @M_ADC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+DMG_A]
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_A]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@ADC_A_B:' reg = DMG_B: goto @M_ADC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+DMG_B]
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_B]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@ADC_A_C:' reg = DMG_C: goto @M_ADC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+DMG_C]
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_C]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@ADC_A_D:' reg = DMG_D: goto @M_ADC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+DMG_D]
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_D]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@ADC_A_E:' reg = DMG_E: goto @M_ADC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+DMG_E]
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_E]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@ADC_A_H:' reg = DMG_H: goto @M_ADC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+DMG_H]
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_H]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@ADC_A_L:' reg = DMG_L: goto @M_ADC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+DMG_L]
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+DMG_L]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+
+@ADC_A_xHL:'reg = PEEK((DMG_H<<8)+DMG_L): goto @M_ADC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+PEEK((DMG_H<<8)+DMG_L)]
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+PEEK((DMG_H<<8)+DMG_L)]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@ADC_A_8:' reg = MEM[DMG_PC]: DMG_PC=DMG_PC+1: goto @M_ADC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+MEM[DMG_PC]]
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+MEM[DMG_PC]]
+  ENDIF
+  DMG_PC=DMG_PC+1
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SUB_A:' reg = DMG_A: goto @M_SUB
+  DMG_A=SUB_table[(DMG_A<<8)+DMG_A]
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SUB_B:' reg = DMG_B: goto @M_SUB
+  DMG_A=SUB_table[(DMG_A<<8)+DMG_B]
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SUB_C:' reg = DMG_C: goto @M_SUB
+  DMG_A=SUB_table[(DMG_A<<8)+DMG_C]
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SUB_D:' reg = DMG_D: goto @M_SUB
+  DMG_A=SUB_table[(DMG_A<<8)+DMG_D]
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SUB_E:' reg = DMG_E: goto @M_SUB
+  DMG_A=SUB_table[(DMG_A<<8)+DMG_E]
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SUB_H:' reg = DMG_H: goto @M_SUB
+  DMG_A=SUB_table[(DMG_A<<8)+DMG_H]
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SUB_L:' reg = DMG_L: goto @M_SUB
+  DMG_A=SUB_table[(DMG_A<<8)+DMG_L]
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SUB_xHL:' reg = PEEK((DMG_H<<8)+DMG_L): goto @M_SUB
+  DMG_A=SUB_table[(DMG_A<<8)+PEEK((DMG_H<<8)+DMG_L)]
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SUB_8:' reg = MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+       ' goto @M_SUB
+  DMG_A=SUB_table[(DMG_A<<8)+MEM[DMG_PC]]
+  DMG_PC=DMG_PC+1
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SBC_A_A:' reg = DMG_A: goto @M_SBC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+DMG_A]
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+DMG_A]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SBC_A_B:' reg = DMG_B: goto @M_SBC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+DMG_B]
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+DMG_B]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SBC_A_C:' reg = DMG_C: goto @M_SBC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+DMG_C]
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+DMG_C]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SBC_A_D:' reg = DMG_D: goto @M_SBC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+DMG_D]
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+DMG_D]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SBC_A_E:' reg = DMG_E: goto @M_SBC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+DMG_E]
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+DMG_E]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SBC_A_H:' reg = DMG_H: goto @M_SBC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+DMG_H]
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+DMG_H]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SBC_A_L:' reg = DMG_L: goto @M_SBC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+DMG_L]
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+DMG_L]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SBC_A_xHL:'reg = PEEK((DMG_H<<8)+DMG_L):
+           'goto @M_SBC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+PEEK((DMG_H<<8)+DMG_L)]
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+PEEK((DMG_H<<8)+DMG_L)]
+  ENDIF
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@SBC_A_8:' reg = MEM[DMG_PC]: DMG_PC=DMG_PC+1:
+         ' goto @M_SBC_A
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+MEM[DMG_PC]]
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+MEM[DMG_PC]]
+  ENDIF
+  DMG_PC=DMG_PC+1
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@AND_A: 'DMG_A=DMG_A AND DMG_A:
+  DMG_F = Z_table[DMG_A] OR &H20:
+  goto @decode_end
+@AND_B: DMG_A=DMG_A AND DMG_B:
+  DMG_F = Z_table[DMG_A] OR &H20:
+  goto @decode_end
+@AND_C: DMG_A=DMG_A AND DMG_C:
+  DMG_F = Z_table[DMG_A] OR &H20:
+  goto @decode_end
+@AND_D: DMG_A=DMG_A AND DMG_D:
+  DMG_F = Z_table[DMG_A] OR &H20:
+  goto @decode_end
+@AND_E: DMG_A=DMG_A AND DMG_E:
+  DMG_F = Z_table[DMG_A] OR &H20:
+  goto @decode_end
+@AND_H: DMG_A=DMG_A AND DMG_H:
+  DMG_F = Z_table[DMG_A] OR &H20:
+  goto @decode_end
+@AND_L: DMG_A=DMG_A AND DMG_L:
+  DMG_F = Z_table[DMG_A] OR &H20:
+  goto @decode_end
+'@AND_xHL: I=PEEK((DMG_H<<8)+DMG_L)
+'  DMG_A=DMG_A AND I:
+@AND_xHL: DMG_A=DMG_A AND PEEK((DMG_H<<8)+DMG_L):
+  DMG_F = Z_table[DMG_A] OR &H20:
+  goto @decode_end
+'@AND_8: I=MEM[DMG_PC]: DMG_PC=DMG_PC+1
+'  DMG_A=DMG_A AND I:
+@AND_8: 
+  DMG_A=DMG_A AND MEM[DMG_PC]: DMG_PC=DMG_PC+1
+  DMG_F = Z_table[DMG_A] OR &H20:
+  goto @decode_end
+
+
+@OR_A: 'DMG_A=DMG_A OR DMG_A:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@OR_B: DMG_A=DMG_A OR DMG_B:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@OR_C: DMG_A=DMG_A OR DMG_C:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@OR_D: DMG_A=DMG_A OR DMG_D:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@OR_E: DMG_A=DMG_A OR DMG_E:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@OR_H: DMG_A=DMG_A OR DMG_H:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@OR_L: DMG_A=DMG_A OR DMG_L:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+'@OR_xHL: I=PEEK((DMG_H<<8)+DMG_L)
+'  DMG_A=DMG_A OR I:
+@OR_xHL: 
+  DMG_A=DMG_A OR PEEK((DMG_H<<8)+DMG_L):
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+'@OR_8: I=MEM[DMG_PC]: DMG_PC=DMG_PC+1
+'  DMG_A=DMG_A OR I:
+@OR_8:
+  DMG_A=DMG_A OR MEM[DMG_PC]: DMG_PC=DMG_PC+1
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+
+@XOR_A: DMG_A=0
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@XOR_B: DMG_A=DMG_A XOR DMG_B:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@XOR_C: DMG_A=DMG_A XOR DMG_C:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@XOR_D: DMG_A=DMG_A XOR DMG_D:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@XOR_E: DMG_A=DMG_A XOR DMG_E:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@XOR_H: DMG_A=DMG_A XOR DMG_H:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+@XOR_L: DMG_A=DMG_A XOR DMG_L:
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+'@XOR_xHL: I=PEEK((DMG_H<<8)+DMG_L)
+'  DMG_A=DMG_A XOR I:
+@XOR_xHL:
+  DMG_A=DMG_A XOR PEEK((DMG_H<<8)+DMG_L):
+  DMG_F = Z_table[DMG_A]:
+  goto @decode_end
+'@XOR_8: I=MEM[DMG_PC]: DMG_PC=DMG_PC+1
+'  DMG_A=DMG_A XOR I:
+@XOR_8:
+  DMG_A=DMG_A XOR MEM[DMG_PC]: DMG_PC=DMG_PC+1
+  DMG_F = Z_table[DMG_A]: goto @decode_end
+
+@CP_A:' reg = DMG_A: goto @M_CP
+  DMG_F=SUB_table[(DMG_A<<8)+DMG_A]AND 255
+  goto @decode_end
+
+@CP_B:' reg = DMG_B: goto @M_CP
+  DMG_F=SUB_table[(DMG_A<<8)+DMG_B]AND 255
+  goto @decode_end
+
+@CP_C:' reg = DMG_C: goto @M_CP
+  DMG_F=SUB_table[(DMG_A<<8)+DMG_C]AND 255
+  goto @decode_end
+
+@CP_D:' reg = DMG_D: goto @M_CP
+  DMG_F=SUB_table[(DMG_A<<8)+DMG_D]AND 255
+  goto @decode_end
+
+@CP_E:' reg = DMG_E: goto @M_CP
+  DMG_F=SUB_table[(DMG_A<<8)+DMG_E]AND 255
+  goto @decode_end
+
+@CP_H:' reg = DMG_H: goto @M_CP
+  DMG_F=SUB_table[(DMG_A<<8)+DMG_H]AND 255
+  goto @decode_end
+
+@CP_L:' reg = DMG_L: goto @M_CP
+  DMG_F=SUB_table[(DMG_A<<8)+DMG_L]AND 255
+  goto @decode_end
+
+@CP_xHL:' reg=PEEK((DMG_H<<8)+DMG_L): goto @M_CP
+  DMG_F=SUB_table[(DMG_A<<8)+PEEK((DMG_H<<8)+DMG_L)]AND 255
+  goto @decode_end
+
+@CP_8:' reg=MEM[DMG_PC]: DMG_PC=DMG_PC+1: goto @M_CP
+  DMG_F=SUB_table[(DMG_A<<8)+MEM[DMG_PC]]AND 255
+  'IF DMG_A ==&H90 THEN DIALOG BIN$(DMG_F,8)
+  DMG_PC=DMG_PC+1
+  goto @decode_end
+
+@INC_A:
+  DMG_A = (DMG_A + 1) AND 255
+  DMG_F = INC_table[DMG_A] OR DMG_F AND &H10
+  goto @decode_end
+
+@INC_B:
+  DMG_B = (DMG_B + 1) AND 255
+  DMG_F = INC_table[DMG_B] OR DMG_F AND &H10
+  goto @decode_end
+
+@INC_C:
+  DMG_C = (DMG_C + 1) AND 255
+  DMG_F = INC_table[DMG_C] OR DMG_F AND &H10
+  goto @decode_end
+
+@INC_D:
+  DMG_D = (DMG_D + 1) AND 255
+  DMG_F = INC_table[DMG_D] OR DMG_F AND &H10
+  goto @decode_end
+
+@INC_E:
+  DMG_E = (DMG_E + 1) AND 255
+  DMG_F = INC_table[DMG_E] OR DMG_F AND &H10
+  goto @decode_end
+
+@INC_H:
+  DMG_H = (DMG_H + 1) AND 255
+  DMG_F = INC_table[DMG_H] OR DMG_F AND &H10
+  goto @decode_end
+
+@INC_L:
+  DMG_L = (DMG_L + 1) AND 255
+  DMG_F = INC_table[DMG_L] OR DMG_F AND &H10
+  goto @decode_end
+
+@INC_xHL:
+  I=(DMG_H<<8)+DMG_L:
+  J=(PEEK(I)+1)AND 255
+  DMG_F = INC_table[J] OR DMG_F AND &H10
+  goto @POKE_I_J_decode_end
+'  POKE I, M_INC(PEEK(I))
+'  goto @decode_end
+
+@DEC_A:
+  DMG_A = (DMG_A - 1) AND 255
+  DMG_F = DEC_table[DMG_A] OR DMG_F AND &H10
+  goto @decode_end
+
+@DEC_B:
+  DMG_B = (DMG_B - 1) AND 255
+  DMG_F = DEC_table[DMG_B] OR DMG_F AND &H10
+  goto @decode_end
+
+@DEC_C:
+  DMG_C = (DMG_C - 1) AND 255
+  DMG_F = DEC_table[DMG_C] OR DMG_F AND &H10
+  goto @decode_end
+
+@DEC_D:
+  DMG_D = (DMG_D - 1) AND 255
+  DMG_F = DEC_table[DMG_D] OR DMG_F AND &H10
+  goto @decode_end
+
+@DEC_E:
+  DMG_E = (DMG_E - 1) AND 255
+  DMG_F = DEC_table[DMG_E] OR DMG_F AND &H10
+  goto @decode_end
+
+@DEC_H:
+  DMG_H = (DMG_H - 1) AND 255
+  DMG_F = DEC_table[DMG_H] OR DMG_F AND &H10
+  goto @decode_end
+
+@DEC_L:
+  DMG_L = (DMG_L - 1) AND 255
+  DMG_F = DEC_table[DMG_L] OR DMG_F AND &H10
+  goto @decode_end
+
+@DEC_xHL:
+  I=(DMG_H<<8)+DMG_L:
+  J=(PEEK(I)-1)AND 255
+  DMG_F = DEC_table[J] OR DMG_F AND &H10
+  goto @POKE_I_J_decode_end
+'  POKE I, M_INC(PEEK(I))
+'  goto @decode_end
+'@DEC_xHL:
+'  I=(DMG_H<<8)+DMG_L:
+'  POKE I, M_DEC(PEEK(I))
+'  goto @decode_end
+
+'      * 16ビット算術演算命令 *
+
+@ADD_HL_BC:
+  I=M_ADDW((DMG_H<<8)+DMG_L,(DMG_B<<8)+DMG_C):
+  DMG_H=I>>>8: DMG_L=I AND 255: goto @decode_end
+@ADD_HL_DE:
+  I=M_ADDW((DMG_H<<8)+DMG_L,(DMG_D<<8)+DMG_E):
+  DMG_H=I>>>8: DMG_L=I AND 255: goto @decode_end
+@ADD_HL_HL:
+  I=M_ADDW((DMG_H<<8)+DMG_L,(DMG_H<<8)+DMG_L):
+  DMG_H=I>>>8: DMG_L=I AND 255: goto @decode_end
+@ADD_HL_SP:
+  I=M_ADDW((DMG_H<<8)+DMG_L,DMG_SP):
+  DMG_H=I>>>8: DMG_L=I AND 255: goto @decode_end
+
+
+'  E8:
+'- add sp, r8
+@ADD_SP_R8:'TODO optimize
+  I=MEM[DMG_PC]: DMG_PC=DMG_PC+1
+  tmp=DMG_SP AND&HFF
+  J=(DMG_SP+SGN8M_table[I])AND&HFFFF
+  DMG_F=ADD_table[(tmp<<8)+I]AND&H3F
+  DMG_SP=J
+  goto @decode_end
+
+@INC_BC:
+  I=(DMG_B<<8)+DMG_C+1:
+  DMG_B=(I>>>8)AND 255 : DMG_C=I AND 255:
+  goto @decode_end
+@INC_DE:
+  I=(DMG_D<<8)+DMG_E+1:
+  DMG_D=(I>>>8)AND 255 : DMG_E=I AND 255:
+  goto @decode_end
+@INC_HL:
+  I=(DMG_H<<8)+DMG_L+1:
+  DMG_H=(I>>>8)AND 255 : DMG_L=I AND 255:
+  goto @decode_end
+@INC_SP:
+  DMG_SP = (DMG_SP+1) AND 65535: goto @decode_end
+
+@DEC_BC:
+  I=(DMG_B<<8)+DMG_C-1:
+  DMG_B=(I>>>8)AND 255 : DMG_C=I AND 255:
+  goto @decode_end
+@DEC_DE:
+  I=(DMG_D<<8)+DMG_E-1:
+  DMG_D=(I>>>8)AND 255 : DMG_E=I AND 255:
+  goto @decode_end
+@DEC_HL:
+  I=(DMG_H<<8)+DMG_L-1:
+  DMG_H=(I>>>8)AND 255 : DMG_L=I AND 255:
+  goto @decode_end
+@DEC_SP:
+  DMG_SP=(DMG_SP-1) AND 65535:
+  goto @decode_end
+
+
+'     * 分岐命令 *
+
+@JP:
+  DMG_PC = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: 
+  GOTO @decode_end
+
+@JP_NZ:
+  IF DMG_F AND &H80 THEN DMG_PC=DMG_PC+2:GOTO @decode_end
+  DMG_PC = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: 
+  GOTO @decode_end
+
+'@JP_NC:
+'  IF !(DMG_F AND &H10) THEN
+'    DMG_PC = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: 
+'    GOTO @decode_end
+'  ELSE
+'    DMG_PC=DMG_PC+2:GOTO @decode_end
+'  ENDIF
+
+@JP_NC:
+  IF DMG_F AND &H10 THEN DMG_PC=DMG_PC+2:GOTO @decode_end
+  DMG_PC = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: 
+  GOTO @decode_end
+
+@JP_Z:
+  IF DMG_F AND &H80 THEN
+    DMG_PC = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: 
+    GOTO @decode_end
+  ELSE
+    DMG_PC=DMG_PC+2:GOTO @decode_end
+  ENDIF
+
+@JP_C:
+  IF DMG_F AND &H10 THEN
+    DMG_PC = (MEM[DMG_PC+1]<<8)+MEM[DMG_PC]: 
+    GOTO @decode_end
+  ELSE
+    DMG_PC=DMG_PC+2:GOTO @decode_end
+  ENDIF
+
+@M_JR:
+@JR:
+  DMG_PC=DMG_PC+SGN8_table[MEM[DMG_PC]]
+  GOTO @decode_end
+@JR_NZ:
+  IF DMG_F AND &H80 THEN DMG_PC=DMG_PC+1:GOTO @decode_end
+  DMG_PC=DMG_PC+SGN8_table[MEM[DMG_PC]]
+  DMG_state0=DMG_state0+4
+  GOTO @decode_end
+@JR_NC:
+  IF DMG_F AND &H10 THEN DMG_PC=DMG_PC+1:GOTO @decode_end
+  DMG_PC=DMG_PC+SGN8_table[MEM[DMG_PC]]
+  DMG_state0=DMG_state0+4
+  GOTO @decode_end
+@JR_Z:
+  IF DMG_F AND &H80 THEN
+    DMG_PC=DMG_PC+SGN8_table[MEM[DMG_PC]]
+    DMG_state0=DMG_state0+4
+    GOTO @decode_end
+  ENDIF
+  DMG_PC=DMG_PC+1
+  GOTO @decode_end
+@JR_C:
+  IF DMG_F AND &H10 THEN
+    DMG_PC=DMG_PC+SGN8_table[MEM[DMG_PC]]
+    DMG_state0=DMG_state0+4
+    GOTO @decode_end
+  ENDIF
+  DMG_PC=DMG_PC+1
+  GOTO @decode_end
+
+
+@CALL:' goto @M_CALL
+@M_CALL
+  tmp2 = (MEM[DMG_PC+1]<<8) + MEM[DMG_PC]
+  DMG_PC=DMG_PC+2
+  DMG_SP = (DMG_SP-1)AND &HFFFF
+  MEM[DMG_SP]=(DMG_PC>>>8) AND 255
+  DMG_SP = (DMG_SP-1)AND&HFFFF
+  MEM[DMG_SP]=DMG_PC AND 255
+
+
+  DMG_PC = tmp2 : 
+  DMG_state0=DMG_state0+12
+  GOTO @decode_end
+
+@CALL_NZ:
+  IF DMG_F AND&H80THEN DMG_PC=DMG_PC+2:GOTO @decode_end
+  goto @M_CALL
+@CALL_NC:
+  IF DMG_F AND&H10THEN DMG_PC=DMG_PC+2:GOTO @decode_end
+  goto @M_CALL
+@CALL_Z:
+  IF DMG_F AND&H80goto @M_CALL
+  DMG_PC=DMG_PC+2
+  GOTO @decode_end
+@CALL_C:
+  IF DMG_F AND&H10goto @M_CALL
+  DMG_PC=DMG_PC+2
+  GOTO @decode_end
+
+
+
+@RET:' goto @M_RET
+@M_RET
+  DMG_PC = (PEEK(DMG_SP+1)<<8) + PEEK(DMG_SP) + DMG_HALT: 
+  DMG_SP = (DMG_SP+2) AND 65535
+  DMG_HALT = #FALSE
+  'FADE 0
+  'DMG_state0=DMG_state0+12
+  goto @decode_end
+
+@RET_NZ:
+  IF DMG_F AND &H80goto @decode_end
+  DMG_PC = (PEEK(DMG_SP+1)<<8) + PEEK(DMG_SP) + DMG_HALT: 
+  DMG_SP = (DMG_SP+2) AND 65535
+  DMG_HALT = #FALSE
+  'FADE 0
+  DMG_state0=DMG_state0+12
+  goto @decode_end
+
+@RET_NC:
+  IF DMG_F AND &H10goto @decode_end
+  DMG_PC = (PEEK(DMG_SP+1)<<8) + PEEK(DMG_SP) + DMG_HALT: 
+  DMG_SP = (DMG_SP+2) AND 65535
+  DMG_HALT = #FALSE
+  'FADE 0
+  DMG_state0=DMG_state0+12
+  goto @decode_end
+
+@RET_Z:
+  IF DMG_F AND &H80 THEN
+    DMG_PC = (PEEK(DMG_SP+1)<<8) + PEEK(DMG_SP) + DMG_HALT: 
+    DMG_SP = (DMG_SP+2) AND 65535
+    DMG_HALT = #FALSE
+    'FADE 0
+    DMG_state0=DMG_state0+12
+    goto @decode_end
+  ENDIF
+  goto @decode_end
+
+@RET_C:
+  IF DMG_F AND &H10 THEN
+    DMG_PC = (PEEK(DMG_SP+1)<<8) + PEEK(DMG_SP) + DMG_HALT: 
+    DMG_SP = (DMG_SP+2) AND 65535
+    DMG_HALT = #FALSE
+    'FADE 0
+    DMG_state0=DMG_state0+12
+    goto @decode_end
+  ENDIF
+  goto @decode_end
+
+@RETI
+  DMG_INTF = 1
+  DMG_PC = (PEEK(DMG_SP+1)<<8) + PEEK(DMG_SP) + DMG_HALT: 
+  DMG_SP = (DMG_SP+2) AND 65535
+  DMG_HALT = #FALSE
+  'FADE 0
+  goto @decode_end
+
+@JP_xHL: DMG_PC=(DMG_H<<8)+DMG_L: : goto @decode_end
+
+@RST00: I=&H00:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @decode_end
+@RST08: I=&H08:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @decode_end
+@RST10: I=&H10:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @decode_end
+@RST18: I=&H18:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @decode_end
+@RST20: I=&H20:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @decode_end
+@RST28: I=&H28:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @decode_end
+@RST30: I=&H30:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @decode_end
+@RST38: I=&H38:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @decode_end
+
+@RST40: I=&H40:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @INTR_end
+@RST48: I=&H48:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @INTR_end
+@RST50: I=&H50:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @INTR_end
+@RST58: I=&H58:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @INTR_end
+@RST60: I=&H60:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @INTR_end
+@RST68: I=&H68:tmp = MEM[#IE]::POKE DMG_SP-1, (DMG_PC>>>8) AND 255:tmp2 = I*(tmp == MEM[#IE]):POKE DMG_SP-2, DMG_PC AND 255:DMG_PC = tmp2: :DMG_SP = (DMG_SP-2)AND 65535:goto @INTR_end
+
+
+'     * ローテート／シフト命令 *
+
+@RLCA:
+  I = DMG_A>>>7
+  DMG_A = ((DMG_A<<1) OR I)AND 255
+  DMG_F = I<<4
+  goto @decode_end
+@RLA:
+  IF DMG_A AND &H80 THEN
+    DMG_A = ((DMG_A<<1) OR ((DMG_F AND&H10)>>>4))AND 255
+    DMG_F = &H10
+    goto @decode_end
+  ELSE
+    DMG_A = ((DMG_A<<1) OR ((DMG_F AND&H10)>>>4))AND 255
+    DMG_F = 0
+    goto @decode_end
+  ENDIF
+@RRCA:
+  I = DMG_A AND 1
+  DMG_A = (DMG_A>>>1) OR (I<<7)
+  DMG_F = I<<4
+  goto @decode_end
+@RRA:
+  IF DMG_A AND 1 THEN
+    DMG_A = ((DMG_A>>>1) OR ((DMG_F AND&H10)<<3)) AND 255
+    DMG_F = &H10
+    goto @decode_end
+  ELSE
+    DMG_A = ((DMG_A>>>1) OR ((DMG_F AND&H10)<<3)) AND 255
+    DMG_F = 0
+    goto @decode_end
+  ENDIF
+
+
+'      * その他の命令 *
+
+'@NOP: goto @decode_end
+
+@DI: DMG_INTF=0: goto @decode_end
+
+@EI: DMG_INTF=1: goto @skip_IRQ_decode_end'goto @decode_end
+
+@SCF:
+  DMG_F = (DMG_F AND &B10010000) OR &H10
+  goto @decode_end
+
+@CCF:
+  DMG_F = DMG_F XOR &H10
+  DMG_F = DMG_F AND &B10010000
+'  DMG_F = (DMG_F XOR &H10)AND &B10010000
+  goto @decode_end
+
+@CPL:
+  'DMG_A = (NOT DMG_A) AND 255
+  'DMG_A = DMG_A XOR &HFF
+  DMG_A = (-DMG_A-1)AND&HFF
+  DMG_F = DMG_F OR&B01100000
+  goto @decode_end
+
+@DAA:
+  J = DMG_A
+  IF (DMG_F AND &H10) THEN J=J OR 256
+  IF (DMG_F AND &H20) THEN J=J OR 512
+  IF (DMG_F AND &H40) THEN J=J OR 1024
+  DMG_A = DAA_table[J]>>>8
+  DMG_F = DAA_table[J] AND 255
+  goto @decode_end
+
+
+
+
+@STOP'TODO
+@HALT:'TODO
+  IF !DMG_INTF goto @decode_end
+  DMG_HALT = #TRUE
+
+  DMG_state0=line_time[PPU_mode]
+  IF !(MEM[#IE]AND MEM[#IF])THEN
+    DMG_PC=DMG_PC-1
+    goto @decode_end
+  ENDIF
+  goto @decode_end
+
+
+
+
+@PFX_CB: ' /* CB 命令の場合 */
+'*----------------------------------------
+' ビット操作命令関連 CB XX
+'*----------------------------------------
+'  : 
+  opcode_CB = MEM[DMG_PC]
+  DMG_PC=DMG_PC+1
+  DMG_state0=DMG_state0+state_CB_table[opcode_CB]
+
+'  PERFBEGIN 1
+
+  ON opcode_CB GOTO \
+\'   x0       x1       x2       x3       x4       x5       x6         x7       x8       x9       xA       xB       xC       xD       xE         xF
+    @RLC_B,  @RLC_C,  @RLC_D,  @RLC_E,  @RLC_H,  @RLC_L,  @RLC_xHL,  @RLC_A,  @RRC_B,  @RRC_C,  @RRC_D,  @RRC_E,  @RRC_H,  @RRC_L,  @RRC_xHL,  @RRC_A,\  '0x
+    @RL_B,   @RL_C,   @RL_D,   @RL_E,   @RL_H,   @RL_L,   @RL_xHL,   @RL_A,   @RR_B,   @RR_C,   @RR_D,   @RR_E,   @RR_H,   @RR_L,   @RR_xHL,   @RR_A, \  '1x
+    @SLA_B,  @SLA_C,  @SLA_D,  @SLA_E,  @SLA_H,  @SLA_L,  @SLA_xHL,  @SLA_A,  @SRA_B,  @SRA_C,  @SRA_D,  @SRA_E,  @SRA_H,  @SRA_L,  @SRA_xHL,  @SRA_A,\  '2x
+    @SWAP_B, @SWAP_C, @SWAP_D, @SWAP_E, @SWAP_H, @SWAP_L, @SWAP_xHL, @SWAP_A, @SRL_B,  @SRL_C,  @SRL_D,  @SRL_E,  @SRL_H,  @SRL_L,  @SRL_xHL,  @SRL_A,\  '3x
+    @BIT_0_B,@BIT_0_C,@BIT_0_D,@BIT_0_E,@BIT_0_H,@BIT_0_L,@BIT_0_xHL,@BIT_0_A,@BIT_1_B,@BIT_1_C,@BIT_1_D,@BIT_1_E,@BIT_1_H,@BIT_1_L,@BIT_1_xHL,@BIT_1_A,\'4x
+    @BIT_2_B,@BIT_2_C,@BIT_2_D,@BIT_2_E,@BIT_2_H,@BIT_2_L,@BIT_2_xHL,@BIT_2_A,@BIT_3_B,@BIT_3_C,@BIT_3_D,@BIT_3_E,@BIT_3_H,@BIT_3_L,@BIT_3_xHL,@BIT_3_A,\'5x
+    @BIT_4_B,@BIT_4_C,@BIT_4_D,@BIT_4_E,@BIT_4_H,@BIT_4_L,@BIT_4_xHL,@BIT_4_A,@BIT_5_B,@BIT_5_C,@BIT_5_D,@BIT_5_E,@BIT_5_H,@BIT_5_L,@BIT_5_xHL,@BIT_5_A,\'6x
+    @BIT_6_B,@BIT_6_C,@BIT_6_D,@BIT_6_E,@BIT_6_H,@BIT_6_L,@BIT_6_xHL,@BIT_6_A,@BIT_7_B,@BIT_7_C,@BIT_7_D,@BIT_7_E,@BIT_7_H,@BIT_7_L,@BIT_7_xHL,@BIT_7_A,\'7x
+    @RES_0_B,@RES_0_C,@RES_0_D,@RES_0_E,@RES_0_H,@RES_0_L,@RES_0_xHL,@RES_0_A,@RES_1_B,@RES_1_C,@RES_1_D,@RES_1_E,@RES_1_H,@RES_1_L,@RES_1_xHL,@RES_1_A,\'8x
+    @RES_2_B,@RES_2_C,@RES_2_D,@RES_2_E,@RES_2_H,@RES_2_L,@RES_2_xHL,@RES_2_A,@RES_3_B,@RES_3_C,@RES_3_D,@RES_3_E,@RES_3_H,@RES_3_L,@RES_3_xHL,@RES_3_A,\'9x
+    @RES_4_B,@RES_4_C,@RES_4_D,@RES_4_E,@RES_4_H,@RES_4_L,@RES_4_xHL,@RES_4_A,@RES_5_B,@RES_5_C,@RES_5_D,@RES_5_E,@RES_5_H,@RES_5_L,@RES_5_xHL,@RES_5_A,\'Ax
+    @RES_6_B,@RES_6_C,@RES_6_D,@RES_6_E,@RES_6_H,@RES_6_L,@RES_6_xHL,@RES_6_A,@RES_7_B,@RES_7_C,@RES_7_D,@RES_7_E,@RES_7_H,@RES_7_L,@RES_7_xHL,@RES_7_A,\'Bx
+    @SET_0_B,@SET_0_C,@SET_0_D,@SET_0_E,@SET_0_H,@SET_0_L,@SET_0_xHL,@SET_0_A,@SET_1_B,@SET_1_C,@SET_1_D,@SET_1_E,@SET_1_H,@SET_1_L,@SET_1_xHL,@SET_1_A,\'Cx
+    @SET_2_B,@SET_2_C,@SET_2_D,@SET_2_E,@SET_2_H,@SET_2_L,@SET_2_xHL,@SET_2_A,@SET_3_B,@SET_3_C,@SET_3_D,@SET_3_E,@SET_3_H,@SET_3_L,@SET_3_xHL,@SET_3_A,\'Dx
+    @SET_4_B,@SET_4_C,@SET_4_D,@SET_4_E,@SET_4_H,@SET_4_L,@SET_4_xHL,@SET_4_A,@SET_5_B,@SET_5_C,@SET_5_D,@SET_5_E,@SET_5_H,@SET_5_L,@SET_5_xHL,@SET_5_A,\'Ex
+    @SET_6_B,@SET_6_C,@SET_6_D,@SET_6_E,@SET_6_H,@SET_6_L,@SET_6_xHL,@SET_6_A,@SET_7_B,@SET_7_C,@SET_7_D,@SET_7_E,@SET_7_H,@SET_7_L,@SET_7_xHL,@SET_7_A  'Fx
+
+@RLC_B: DMG_B=M_RLC(DMG_B): GOTO @decode_end
+@RLC_C: DMG_C=M_RLC(DMG_C): GOTO @decode_end
+@RLC_D: DMG_D=M_RLC(DMG_D): GOTO @decode_end
+@RLC_E: DMG_E=M_RLC(DMG_E): GOTO @decode_end
+@RLC_H: DMG_H=M_RLC(DMG_H): GOTO @decode_end
+@RLC_L: DMG_L=M_RLC(DMG_L): GOTO @decode_end
+@RLC_xHL:
+  I=(DMG_H<<8)+DMG_L
+  POKE I, M_RLC(PEEK(I))
+  GOTO @decode_end
+@RLC_A: DMG_A=M_RLC(DMG_A): GOTO @decode_end
+
+@RRC_B: DMG_B=M_RRC(DMG_B): GOTO @decode_end
+@RRC_C: DMG_C=M_RRC(DMG_C): GOTO @decode_end
+@RRC_D: DMG_D=M_RRC(DMG_D): GOTO @decode_end
+@RRC_E: DMG_E=M_RRC(DMG_E): GOTO @decode_end
+@RRC_H: DMG_H=M_RRC(DMG_H): GOTO @decode_end
+@RRC_L: DMG_L=M_RRC(DMG_L): GOTO @decode_end
+@RRC_xHL:
+  I=(DMG_H<<8)+DMG_L
+  POKE I, M_RRC(PEEK(I))
+  GOTO @decode_end
+@RRC_A: DMG_A=M_RRC(DMG_A): GOTO @decode_end
+
+@RL_B: DMG_B=M_RL(DMG_B): GOTO @decode_end
+@RL_C: DMG_C=M_RL(DMG_C): GOTO @decode_end
+@RL_D: DMG_D=M_RL(DMG_D): GOTO @decode_end
+@RL_E: DMG_E=M_RL(DMG_E): GOTO @decode_end
+@RL_H: DMG_H=M_RL(DMG_H): GOTO @decode_end
+@RL_L: DMG_L=M_RL(DMG_L): GOTO @decode_end
+@RL_xHL:
+  I=(DMG_H<<8)+DMG_L
+  POKE I, M_RL(PEEK(I)):
+  GOTO @decode_end
+@RL_A: DMG_A=M_RL(DMG_A): GOTO @decode_end
+
+
+@RR_B:
+  IF DMG_F AND &H10 THEN
+    DMG_F = RR_C_table[DMG_B]
+    DMG_B = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ELSE
+    DMG_F = RR_NC_table[DMG_B]
+    DMG_B = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ENDIF
+
+@RR_C:
+  IF DMG_F AND &H10 THEN
+    DMG_F = RR_C_table[DMG_C]
+    DMG_C = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ELSE
+    DMG_F = RR_NC_table[DMG_C]
+    DMG_C = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ENDIF
+
+@RR_D:
+  IF DMG_F AND &H10 THEN
+    DMG_F = RR_C_table[DMG_D]
+    DMG_D = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ELSE
+    DMG_F = RR_NC_table[DMG_D]
+    DMG_D = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ENDIF
+
+@RR_E:
+  IF DMG_F AND &H10 THEN
+    DMG_F = RR_C_table[DMG_E]
+    DMG_E = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ELSE
+    DMG_F = RR_NC_table[DMG_E]
+    DMG_E = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ENDIF
+
+@RR_H:
+  IF DMG_F AND &H10 THEN
+    DMG_F = RR_C_table[DMG_H]
+    DMG_H = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ELSE
+    DMG_F = RR_NC_table[DMG_H]
+    DMG_H = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ENDIF
+
+@RR_L:
+  IF DMG_F AND &H10 THEN
+    DMG_F = RR_C_table[DMG_L]
+    DMG_L = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ELSE
+    DMG_F = RR_NC_table[DMG_L]
+    DMG_L = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ENDIF
+
+@RR_xHL:
+  I=(DMG_H<<8)+DMG_L
+  J=MEM[I]
+  IF DMG_F AND &H10 THEN
+    DMG_F = RR_C_table[J]
+    J = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+  ELSE
+    DMG_F = RR_NC_table[J]
+    J = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+  ENDIF
+  POKE I, J
+  GOTO @decode_end
+
+@RR_A:
+  IF DMG_F AND &H10 THEN
+    DMG_F = RR_C_table[DMG_A]
+    DMG_A = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ELSE
+    DMG_F = RR_NC_table[DMG_A]
+    DMG_A = DMG_F>>>8
+    DMG_F = DMG_F AND&HFF
+    GOTO @decode_end
+  ENDIF
+
+
+
+@SLA_B:
+  DMG_B = SLA_table[DMG_B]
+  DMG_F = DMG_B AND&HFF
+  DMG_B = DMG_B>>>8
+  GOTO @decode_end
+
+@SLA_C:
+  DMG_C = SLA_table[DMG_C]
+  DMG_F = DMG_C AND&HFF
+  DMG_C = DMG_C>>>8
+  GOTO @decode_end
+
+@SLA_D:
+  DMG_D = SLA_table[DMG_D]
+  DMG_F = DMG_D AND&HFF
+  DMG_D = DMG_D>>>8
+  GOTO @decode_end
+
+@SLA_E:
+  DMG_E = SLA_table[DMG_E]
+  DMG_F = DMG_E AND&HFF
+  DMG_E = DMG_E>>>8
+  GOTO @decode_end
+
+@SLA_H:
+  DMG_H = SLA_table[DMG_H]
+  DMG_F = DMG_H AND&HFF
+  DMG_H = DMG_H>>>8
+  GOTO @decode_end
+
+@SLA_L:
+  DMG_L = SLA_table[DMG_L]
+  DMG_F = DMG_L AND&HFF
+  DMG_L = DMG_L>>>8
+  GOTO @decode_end
+
+@SLA_xHL:
+  I=(DMG_H<<8)+DMG_L
+  J=MEM[I]
+  J = SLA_table[J]
+  DMG_F = J AND&HFF
+  J = J>>>8
+  POKE I, J
+  GOTO @decode_end
+
+@SLA_A:
+  DMG_A = SLA_table[DMG_A]
+  DMG_F = DMG_A AND&HFF
+  DMG_A = DMG_A>>>8
+  GOTO @decode_end
+
+
+@SRA_B:
+  DMG_B = SRA_table[DMG_B]
+  DMG_F = DMG_B AND&HFF
+  DMG_B = DMG_B>>>8
+  GOTO @decode_end
+
+@SRA_C:
+  DMG_C = SRA_table[DMG_C]
+  DMG_F = DMG_C AND&HFF
+  DMG_C = DMG_C>>>8
+  GOTO @decode_end
+
+@SRA_D:
+  DMG_D = SRA_table[DMG_D]
+  DMG_F = DMG_D AND&HFF
+  DMG_D = DMG_D>>>8
+  GOTO @decode_end
+
+@SRA_E:
+  DMG_E = SRA_table[DMG_E]
+  DMG_F = DMG_E AND&HFF
+  DMG_E = DMG_E>>>8
+  GOTO @decode_end
+
+@SRA_H:
+  DMG_H = SRA_table[DMG_H]
+  DMG_F = DMG_H AND&HFF
+  DMG_H = DMG_H>>>8
+  GOTO @decode_end
+
+@SRA_L:
+  DMG_L = SRA_table[DMG_L]
+  DMG_F = DMG_L AND&HFF
+  DMG_L = DMG_L>>>8
+  GOTO @decode_end
+
+@SRA_xHL:
+  I=(DMG_H<<8)+DMG_L
+  J=MEM[I]
+  J = SRA_table[J]
+  DMG_F = J AND&HFF
+  J = J>>>8
+  POKE I, J
+  GOTO @decode_end
+
+@SRA_A:
+  DMG_A = SRA_table[DMG_A]
+  DMG_F = DMG_A AND&HFF
+  DMG_A = DMG_A>>>8
+  GOTO @decode_end
+
+
+@SWAP_B:
+  DMG_F=SWAP_table[DMG_B]:
+  DMG_B=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SWAP_C:
+  DMG_F=SWAP_table[DMG_C]:
+  DMG_C=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SWAP_D:
+  DMG_F=SWAP_table[DMG_D]:
+  DMG_D=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SWAP_E:
+  DMG_F=SWAP_table[DMG_E]:
+  DMG_E=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SWAP_H:
+  DMG_F=SWAP_table[DMG_H]:
+  DMG_H=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SWAP_L:
+  DMG_F=SWAP_table[DMG_L]:
+  DMG_L=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SWAP_xHL:
+  I=(DMG_H<<8)+DMG_L
+  DMG_F=SWAP_table[PEEK(I)]:
+  J=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  POKE I, J
+  GOTO @decode_end
+
+@SWAP_A:
+  DMG_F=SWAP_table[DMG_A]:
+  DMG_A=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+
+@SRL_B:
+  DMG_F=SRL_table[DMG_B]
+  DMG_B=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SRL_C:
+  DMG_F=SRL_table[DMG_C]
+  DMG_C=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SRL_D:
+  DMG_F=SRL_table[DMG_D]
+  DMG_D=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SRL_E:
+  DMG_F=SRL_table[DMG_E]
+  DMG_E=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SRL_H:
+  DMG_F=SRL_table[DMG_H]
+  DMG_H=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SRL_L:
+  DMG_F=SRL_table[DMG_L]
+  DMG_L=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+@SRL_xHL:
+  DMG_F=SRL_table[PEEK(I)]
+  J=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+
+  I=(DMG_H<<8)+DMG_L
+  POKE I,J
+  GOTO @decode_end
+
+@SRL_A:
+  DMG_F=SRL_table[DMG_A]
+  DMG_A=DMG_F>>>8
+  DMG_F=DMG_F AND 255
+  GOTO @decode_end
+
+' * ビット操作命令 *
+
+@BIT_0_B:
+  DMG_F=DMG_F AND &H10 OR BIT0_table[DMG_B]:
+  GOTO @decode_end
+
+@BIT_0_C:
+  DMG_F=DMG_F AND &H10 OR BIT0_table[DMG_C]:
+  GOTO @decode_end
+
+@BIT_0_D:
+  DMG_F=DMG_F AND &H10 OR BIT0_table[DMG_D]:
+  GOTO @decode_end
+
+@BIT_0_E:
+  DMG_F=DMG_F AND &H10 OR BIT0_table[DMG_E]:
+  GOTO @decode_end
+
+@BIT_0_H:
+  DMG_F=DMG_F AND &H10 OR BIT0_table[DMG_H]:
+  GOTO @decode_end
+
+@BIT_0_L:
+  DMG_F=DMG_F AND &H10 OR BIT0_table[DMG_L]:
+  GOTO @decode_end
+
+@BIT_0_xHL:
+  DMG_F=DMG_F AND &H10 OR BIT0_table[PEEK((DMG_H<<8)+DMG_L)]:
+  GOTO @decode_end
+
+@BIT_0_A:
+  DMG_F=DMG_F AND &H10 OR BIT0_table[DMG_A]:
+  GOTO @decode_end
+
+
+@BIT_1_B:
+  DMG_F=DMG_F AND &H10 OR BIT1_table[DMG_B]:
+  GOTO @decode_end
+
+@BIT_1_C:
+  DMG_F=DMG_F AND &H10 OR BIT1_table[DMG_C]:
+  GOTO @decode_end
+
+@BIT_1_D:
+  DMG_F=DMG_F AND &H10 OR BIT1_table[DMG_D]:
+  GOTO @decode_end
+
+@BIT_1_E:
+  DMG_F=DMG_F AND &H10 OR BIT1_table[DMG_E]:
+  GOTO @decode_end
+
+@BIT_1_H:
+  DMG_F=DMG_F AND &H10 OR BIT1_table[DMG_H]:
+  GOTO @decode_end
+
+@BIT_1_L:
+  DMG_F=DMG_F AND &H10 OR BIT1_table[DMG_L]:
+  GOTO @decode_end
+
+@BIT_1_xHL:
+  DMG_F=DMG_F AND &H10 OR BIT1_table[PEEK((DMG_H<<8)+DMG_L)]:
+  GOTO @decode_end
+
+@BIT_1_A:
+  DMG_F=DMG_F AND &H10 OR BIT1_table[DMG_A]:
+  GOTO @decode_end
+
+
+@BIT_2_B:
+  DMG_F=DMG_F AND &H10 OR BIT2_table[DMG_B]:
+  GOTO @decode_end
+
+@BIT_2_C:
+  DMG_F=DMG_F AND &H10 OR BIT2_table[DMG_C]:
+  GOTO @decode_end
+
+@BIT_2_D:
+  DMG_F=DMG_F AND &H10 OR BIT2_table[DMG_D]:
+  GOTO @decode_end
+
+@BIT_2_E:
+  DMG_F=DMG_F AND &H10 OR BIT2_table[DMG_E]:
+  GOTO @decode_end
+
+@BIT_2_H:
+  DMG_F=DMG_F AND &H10 OR BIT2_table[DMG_H]:
+  GOTO @decode_end
+
+@BIT_2_L:
+  DMG_F=DMG_F AND &H10 OR BIT2_table[DMG_L]:
+  GOTO @decode_end
+
+@BIT_2_xHL:
+  DMG_F=DMG_F AND &H10 OR BIT2_table[PEEK((DMG_H<<8)+DMG_L)]:
+  GOTO @decode_end
+
+@BIT_2_A:
+  DMG_F=DMG_F AND &H10 OR BIT2_table[DMG_A]:
+  GOTO @decode_end
+
+
+@BIT_3_B:
+  DMG_F=DMG_F AND &H10 OR BIT3_table[DMG_B]:
+  GOTO @decode_end
+
+@BIT_3_C:
+  DMG_F=DMG_F AND &H10 OR BIT3_table[DMG_C]:
+  GOTO @decode_end
+
+@BIT_3_D:
+  DMG_F=DMG_F AND &H10 OR BIT3_table[DMG_D]:
+  GOTO @decode_end
+
+@BIT_3_E:
+  DMG_F=DMG_F AND &H10 OR BIT3_table[DMG_E]:
+  GOTO @decode_end
+
+@BIT_3_H:
+  DMG_F=DMG_F AND &H10 OR BIT3_table[DMG_H]:
+  GOTO @decode_end
+
+@BIT_3_L:
+  DMG_F=DMG_F AND &H10 OR BIT3_table[DMG_L]:
+  GOTO @decode_end
+
+@BIT_3_xHL:
+  DMG_F=DMG_F AND &H10 OR BIT3_table[PEEK((DMG_H<<8)+DMG_L)]:
+  GOTO @decode_end
+
+@BIT_3_A:
+  DMG_F=DMG_F AND &H10 OR BIT3_table[DMG_A]:
+  GOTO @decode_end
+
+
+@BIT_4_B:
+  DMG_F=DMG_F AND &H10 OR BIT4_table[DMG_B]:
+  GOTO @decode_end
+
+@BIT_4_C:
+  DMG_F=DMG_F AND &H10 OR BIT4_table[DMG_C]:
+  GOTO @decode_end
+
+@BIT_4_D:
+  DMG_F=DMG_F AND &H10 OR BIT4_table[DMG_D]:
+  GOTO @decode_end
+
+@BIT_4_E:
+  DMG_F=DMG_F AND &H10 OR BIT4_table[DMG_E]:
+  GOTO @decode_end
+
+@BIT_4_H:
+  DMG_F=DMG_F AND &H10 OR BIT4_table[DMG_H]:
+  GOTO @decode_end
+
+@BIT_4_L:
+  DMG_F=DMG_F AND &H10 OR BIT4_table[DMG_L]:
+  GOTO @decode_end
+
+@BIT_4_xHL:
+  DMG_F=DMG_F AND &H10 OR BIT4_table[PEEK((DMG_H<<8)+DMG_L)]:
+  GOTO @decode_end
+
+@BIT_4_A:
+  DMG_F=DMG_F AND &H10 OR BIT4_table[DMG_A]:
+  GOTO @decode_end
+
+
+@BIT_5_B:
+  DMG_F=DMG_F AND &H10 OR BIT5_table[DMG_B]:
+  GOTO @decode_end
+
+@BIT_5_C:
+  DMG_F=DMG_F AND &H10 OR BIT5_table[DMG_C]:
+  GOTO @decode_end
+
+@BIT_5_D:
+  DMG_F=DMG_F AND &H10 OR BIT5_table[DMG_D]:
+  GOTO @decode_end
+
+@BIT_5_E:
+  DMG_F=DMG_F AND &H10 OR BIT5_table[DMG_E]:
+  GOTO @decode_end
+
+@BIT_5_H:
+  DMG_F=DMG_F AND &H10 OR BIT5_table[DMG_H]:
+  GOTO @decode_end
+
+@BIT_5_L:
+  DMG_F=DMG_F AND &H10 OR BIT5_table[DMG_L]:
+  GOTO @decode_end
+
+@BIT_5_xHL:
+  DMG_F=DMG_F AND &H10 OR BIT5_table[PEEK((DMG_H<<8)+DMG_L)]:
+  GOTO @decode_end
+
+@BIT_5_A:
+  DMG_F=DMG_F AND &H10 OR BIT5_table[DMG_A]:
+  GOTO @decode_end
+
+
+@BIT_6_B:
+  DMG_F=DMG_F AND &H10 OR BIT6_table[DMG_B]:
+  GOTO @decode_end
+
+@BIT_6_C:
+  DMG_F=DMG_F AND &H10 OR BIT6_table[DMG_C]:
+  GOTO @decode_end
+
+@BIT_6_D:
+  DMG_F=DMG_F AND &H10 OR BIT6_table[DMG_D]:
+  GOTO @decode_end
+
+@BIT_6_E:
+  DMG_F=DMG_F AND &H10 OR BIT6_table[DMG_E]:
+  GOTO @decode_end
+
+@BIT_6_H:
+  DMG_F=DMG_F AND &H10 OR BIT6_table[DMG_H]:
+  GOTO @decode_end
+
+@BIT_6_L:
+  DMG_F=DMG_F AND &H10 OR BIT6_table[DMG_L]:
+  GOTO @decode_end
+
+@BIT_6_xHL:
+  DMG_F=DMG_F AND &H10 OR BIT6_table[PEEK((DMG_H<<8)+DMG_L)]:
+  GOTO @decode_end
+
+@BIT_6_A:
+  DMG_F=DMG_F AND &H10 OR BIT6_table[DMG_A]:
+  GOTO @decode_end
+
+
+@BIT_7_B:
+  DMG_F=DMG_F AND &H10 OR BIT7_table[DMG_B]:
+  GOTO @decode_end
+
+@BIT_7_C:
+  DMG_F=DMG_F AND &H10 OR BIT7_table[DMG_C]:
+  GOTO @decode_end
+
+@BIT_7_D:
+  DMG_F=DMG_F AND &H10 OR BIT7_table[DMG_D]:
+  GOTO @decode_end
+
+@BIT_7_E:
+  DMG_F=DMG_F AND &H10 OR BIT7_table[DMG_E]:
+  GOTO @decode_end
+
+@BIT_7_H:
+  DMG_F=DMG_F AND &H10 OR BIT7_table[DMG_H]:
+  GOTO @decode_end
+
+@BIT_7_L:
+  DMG_F=DMG_F AND &H10 OR BIT7_table[DMG_L]:
+  GOTO @decode_end
+
+@BIT_7_xHL:
+  DMG_F=DMG_F AND &H10 OR BIT7_table[PEEK((DMG_H<<8)+DMG_L)]:
+  GOTO @decode_end
+
+@BIT_7_A:
+  DMG_F=DMG_F AND &H10 OR BIT7_table[DMG_A]:
+  GOTO @decode_end
+
+
+
+@RES_0_B: DMG_B = DMG_B AND 254: GOTO @decode_end
+@RES_0_C: DMG_C = DMG_C AND 254: GOTO @decode_end
+@RES_0_D: DMG_D = DMG_D AND 254: GOTO @decode_end
+@RES_0_E: DMG_E = DMG_E AND 254: GOTO @decode_end
+@RES_0_H: DMG_H = DMG_H AND 254: GOTO @decode_end
+@RES_0_L: DMG_L = DMG_L AND 254: GOTO @decode_end
+@RES_0_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) AND 254
+  GOTO @decode_end
+@RES_0_A: DMG_A = DMG_A AND 254: GOTO @decode_end
+
+@RES_1_B: DMG_B = DMG_B AND 253: GOTO @decode_end
+@RES_1_C: DMG_C = DMG_C AND 253: GOTO @decode_end
+@RES_1_D: DMG_D = DMG_D AND 253: GOTO @decode_end
+@RES_1_E: DMG_E = DMG_E AND 253: GOTO @decode_end
+@RES_1_H: DMG_H = DMG_H AND 253: GOTO @decode_end
+@RES_1_L: DMG_L = DMG_L AND 253: GOTO @decode_end
+@RES_1_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) AND 253
+  GOTO @decode_end
+@RES_1_A: DMG_A = DMG_A AND 253: GOTO @decode_end
+
+@RES_2_B: DMG_B = DMG_B AND 251: GOTO @decode_end
+@RES_2_C: DMG_C = DMG_C AND 251: GOTO @decode_end
+@RES_2_D: DMG_D = DMG_D AND 251: GOTO @decode_end
+@RES_2_E: DMG_E = DMG_E AND 251: GOTO @decode_end
+@RES_2_H: DMG_H = DMG_H AND 251: GOTO @decode_end
+@RES_2_L: DMG_L = DMG_L AND 251: GOTO @decode_end
+@RES_2_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) AND 251
+  GOTO @decode_end
+@RES_2_A: DMG_A = DMG_A AND 251: GOTO @decode_end
+
+@RES_3_B: DMG_B = DMG_B AND 247: GOTO @decode_end
+@RES_3_C: DMG_C = DMG_C AND 247: GOTO @decode_end
+@RES_3_D: DMG_D = DMG_D AND 247: GOTO @decode_end
+@RES_3_E: DMG_E = DMG_E AND 247: GOTO @decode_end
+@RES_3_H: DMG_H = DMG_H AND 247: GOTO @decode_end
+@RES_3_L: DMG_L = DMG_L AND 247: GOTO @decode_end
+@RES_3_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) AND 247
+  GOTO @decode_end
+@RES_3_A: DMG_A = DMG_A AND 247: GOTO @decode_end
+
+@RES_4_B: DMG_B = DMG_B AND 239: GOTO @decode_end
+@RES_4_C: DMG_C = DMG_C AND 239: GOTO @decode_end
+@RES_4_D: DMG_D = DMG_D AND 239: GOTO @decode_end
+@RES_4_E: DMG_E = DMG_E AND 239: GOTO @decode_end
+@RES_4_H: DMG_H = DMG_H AND 239: GOTO @decode_end
+@RES_4_L: DMG_L = DMG_L AND 239: GOTO @decode_end
+@RES_4_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) AND 239
+  GOTO @decode_end
+@RES_4_A: DMG_A = DMG_A AND 239: GOTO @decode_end
+
+@RES_5_B: DMG_B = DMG_B AND 223: GOTO @decode_end
+@RES_5_C: DMG_C = DMG_C AND 223: GOTO @decode_end
+@RES_5_D: DMG_D = DMG_D AND 223: GOTO @decode_end
+@RES_5_E: DMG_E = DMG_E AND 223: GOTO @decode_end
+@RES_5_H: DMG_H = DMG_H AND 223: GOTO @decode_end
+@RES_5_L: DMG_L = DMG_L AND 223: GOTO @decode_end
+@RES_5_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) AND 223
+  GOTO @decode_end
+@RES_5_A: DMG_A = DMG_A AND 223: GOTO @decode_end
+
+@RES_6_B: DMG_B = DMG_B AND 191: GOTO @decode_end
+@RES_6_C: DMG_C = DMG_C AND 191: GOTO @decode_end
+@RES_6_D: DMG_D = DMG_D AND 191: GOTO @decode_end
+@RES_6_E: DMG_E = DMG_E AND 191: GOTO @decode_end
+@RES_6_H: DMG_H = DMG_H AND 191: GOTO @decode_end
+@RES_6_L: DMG_L = DMG_L AND 191: GOTO @decode_end
+@RES_6_xHL:
+  I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) AND 191
+  GOTO @decode_end
+@RES_6_A: DMG_A = DMG_A AND 191: GOTO @decode_end
+
+@RES_7_B: DMG_B = DMG_B AND 127: GOTO @decode_end
+@RES_7_C: DMG_C = DMG_C AND 127: GOTO @decode_end
+@RES_7_D: DMG_D = DMG_D AND 127: GOTO @decode_end
+@RES_7_E: DMG_E = DMG_E AND 127: GOTO @decode_end
+@RES_7_H: DMG_H = DMG_H AND 127: GOTO @decode_end
+@RES_7_L: DMG_L = DMG_L AND 127: GOTO @decode_end
+@RES_7_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) AND 127
+  GOTO @decode_end
+@RES_7_A: DMG_A = DMG_A AND 127: GOTO @decode_end
+
+@SET_0_B: DMG_B = DMG_B OR 1: GOTO @decode_end
+@SET_0_C: DMG_C = DMG_C OR 1: GOTO @decode_end
+@SET_0_D: DMG_D = DMG_D OR 1: GOTO @decode_end
+@SET_0_E: DMG_E = DMG_E OR 1: GOTO @decode_end
+@SET_0_H: DMG_H = DMG_H OR 1: GOTO @decode_end
+@SET_0_L: DMG_L = DMG_L OR 1: GOTO @decode_end
+@SET_0_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) OR 1
+  GOTO @decode_end
+@SET_0_A: DMG_A = DMG_A OR 1: GOTO @decode_end
+
+@SET_1_B: DMG_B = DMG_B OR 2: GOTO @decode_end
+@SET_1_C: DMG_C = DMG_C OR 2: GOTO @decode_end
+@SET_1_D: DMG_D = DMG_D OR 2: GOTO @decode_end
+@SET_1_E: DMG_E = DMG_E OR 2: GOTO @decode_end
+@SET_1_H: DMG_H = DMG_H OR 2: GOTO @decode_end
+@SET_1_L: DMG_L = DMG_L OR 2: GOTO @decode_end
+@SET_1_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) OR 2
+  GOTO @decode_end
+@SET_1_A: DMG_A = DMG_A OR 2: GOTO @decode_end
+
+@SET_2_B: DMG_B = DMG_B OR 4: GOTO @decode_end
+@SET_2_C: DMG_C = DMG_C OR 4: GOTO @decode_end
+@SET_2_D: DMG_D = DMG_D OR 4: GOTO @decode_end
+@SET_2_E: DMG_E = DMG_E OR 4: GOTO @decode_end
+@SET_2_H: DMG_H = DMG_H OR 4: GOTO @decode_end
+@SET_2_L: DMG_L = DMG_L OR 4: GOTO @decode_end
+@SET_2_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) OR 4
+  GOTO @decode_end
+@SET_2_A: DMG_A = DMG_A OR 4: GOTO @decode_end
+
+@SET_3_B: DMG_B = DMG_B OR 8: GOTO @decode_end
+@SET_3_C: DMG_C = DMG_C OR 8: GOTO @decode_end
+@SET_3_D: DMG_D = DMG_D OR 8: GOTO @decode_end
+@SET_3_E: DMG_E = DMG_E OR 8: GOTO @decode_end
+@SET_3_H: DMG_H = DMG_H OR 8: GOTO @decode_end
+@SET_3_L: DMG_L = DMG_L OR 8: GOTO @decode_end
+@SET_3_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) OR 8
+  GOTO @decode_end
+@SET_3_A: DMG_A = DMG_A OR 8: GOTO @decode_end
+
+@SET_4_B: DMG_B = DMG_B OR 16: GOTO @decode_end
+@SET_4_C: DMG_C = DMG_C OR 16: GOTO @decode_end
+@SET_4_D: DMG_D = DMG_D OR 16: GOTO @decode_end
+@SET_4_E: DMG_E = DMG_E OR 16: GOTO @decode_end
+@SET_4_H: DMG_H = DMG_H OR 16: GOTO @decode_end
+@SET_4_L: DMG_L = DMG_L OR 16: GOTO @decode_end
+@SET_4_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) OR 16
+  GOTO @decode_end
+@SET_4_A: DMG_A = DMG_A OR 16: GOTO @decode_end
+
+@SET_5_B: DMG_B = DMG_B OR 32: GOTO @decode_end
+@SET_5_C: DMG_C = DMG_C OR 32: GOTO @decode_end
+@SET_5_D: DMG_D = DMG_D OR 32: GOTO @decode_end
+@SET_5_E: DMG_E = DMG_E OR 32: GOTO @decode_end
+@SET_5_H: DMG_H = DMG_H OR 32: GOTO @decode_end
+@SET_5_L: DMG_L = DMG_L OR 32: GOTO @decode_end
+@SET_5_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) OR 32
+  GOTO @decode_end
+@SET_5_A: DMG_A = DMG_A OR 32: GOTO @decode_end
+
+@SET_6_B: DMG_B = DMG_B OR 64: GOTO @decode_end
+@SET_6_C: DMG_C = DMG_C OR 64: GOTO @decode_end
+@SET_6_D: DMG_D = DMG_D OR 64: GOTO @decode_end
+@SET_6_E: DMG_E = DMG_E OR 64: GOTO @decode_end
+@SET_6_H: DMG_H = DMG_H OR 64: GOTO @decode_end
+@SET_6_L: DMG_L = DMG_L OR 64: GOTO @decode_end
+@SET_6_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) OR 64
+  GOTO @decode_end
+@SET_6_A: DMG_A = DMG_A OR 64: GOTO @decode_end
+
+@SET_7_B: DMG_B = DMG_B OR 128: GOTO @decode_end
+@SET_7_C: DMG_C = DMG_C OR 128: GOTO @decode_end
+@SET_7_D: DMG_D = DMG_D OR 128: GOTO @decode_end
+@SET_7_E: DMG_E = DMG_E OR 128: GOTO @decode_end
+@SET_7_H: DMG_H = DMG_H OR 128: GOTO @decode_end
+@SET_7_L: DMG_L = DMG_L OR 128: GOTO @decode_end
+@SET_7_xHL: I=(DMG_H<<8)+DMG_L
+  POKE I, PEEK(I) OR 128
+  GOTO @decode_end
+@SET_7_A: DMG_A = DMG_A OR 128: GOTO @decode_end
+
+
+@M_ADD_A:' reg に値を入れて飛んで来ること！
+  DMG_A=ADD_table[(DMG_A<<8)+reg]
+  DMG_F=DMG_A AND 255
+  DMG_A=DMG_A>>>8
+  goto @decode_end
+
+@M_ADC_A:' reg に値を入れて飛んで来ること！
+  IF DMG_F AND &H10 THEN
+    DMG_A=ADC_table[(DMG_A<<8)+reg]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+  ELSE
+    DMG_A=ADD_table[(DMG_A<<8)+reg]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+  ENDIF
+
+
+@M_SUB:' reg に値を入れて飛んで来ること！
+    DMG_A=SUB_table[(DMG_A<<8)+reg]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+
+@M_SBC_A:' reg に値を入れて飛んで来ること！
+  IF DMG_F AND &H10 THEN
+    DMG_A=SBC_table[(DMG_A<<8)+reg]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+  ELSE
+    DMG_A=SUB_table[(DMG_A<<8)+reg]
+    DMG_F=DMG_A AND 255
+    DMG_A=DMG_A>>>8
+    goto @decode_end
+  ENDIF
+
+
+@M_CP:' reg に値を入れて飛んで来ること！
+  DMG_F=SUB_table[(DMG_A<<8)+reg]AND 255
+  goto @decode_end
+
+
+
+@POKE_I_J_decode_end:
+  POKE I,J
+
+@NOP
+@decode_end: 'DECEND
+
+
+
+@IRQ
+  IF DMG_INTF THEN
+    DMG_HALT=0
+    pending_IRQ = MEM[#IE] AND MEM[#IF]
+    IF pending_IRQ THEN
+      DMG_INTF = 0:DMG_state0=DMG_state0+16:
+      IF     pending_IRQ AND &B00001 THEN 'V-blank
+        MEM[#IF]=MEM[#IF] AND NOT(MEM[#IE] AND &B00000001):
+        GOTO @RST40
+      ELSEIF pending_IRQ AND &B00010 THEN 'STAT
+        MEM[#IF]=MEM[#IF] AND NOT(MEM[#IE] AND &B00000010):
+        GOTO @RST48
+      ELSEIF pending_IRQ AND &B00100 THEN 'Timer
+        MEM[#IF]=MEM[#IF] AND NOT(MEM[#IE] AND &B00000100):
+        GOTO @RST50
+      ELSEIF pending_IRQ AND &B01000 THEN
+        MEM[#IF]=MEM[#IF] AND NOT(MEM[#IE] AND &B00001000):
+        GOTO @RST58
+      ELSEIF pending_IRQ AND &B10000 THEN 'Joypad
+        MEM[#IF]=MEM[#IF] AND NOT(MEM[#IE] AND &B00010000):
+        GOTO @RST60
+      ENDIF
+    ENDIF
+  ENDIF
+@INTR_end
+@IRQ_end
+
+@skip_IRQ_decode_end
+'DMG_PC=DMG_PC AND&HFFFF
+
+
+
+'timer_update
+@timer
+  IF DMG_state0 AND&H6FC THEN 
+    clock_main=clock_main+1
+    clock_div=clock_div+1
+
+      IF clock_div == 16 THEN
+        MEM[#DIV] = MEM[#DIV]+1
+        IF MEM[#DIV]>255 THEN
+          MEM[#DIV]=0
+          GOSUB @APU_tick
+        ENDIF
+        clock_div = 0
+      ENDIF
+   ENDIF
+@timer_end
+
+
+
+  UNTIL( DMG_state0 >= line_time[PPU_mode])
+'************************************************
+'* DMG decoder END (!!!!!)
+'************************************************
+
+
+'************************************************
+'* PPU_update
+'************************************************
+@PPU
+  total_state=total_state+DMG_state0
+  DMG_state0=0
+IF PPU_on THEN\
+  ON PPU_mode GOTO @PPU_mode_hblank,\
+                   @PPU_mode_vblank,\
+                   @PPU_mode_OAM,\
+                   @PPU_mode_VRAM,\
+                   @PPU_end
+  GOTO @PPU_end
+
+@PPU_mode_OAM:
+  PPU_mode = #PPU_mode_VRAM
+
+'4x
+  BG_line_ofs#[MEM[#LY]+21,0] = line_ofs_table_x#[MEM[#SCX]]
+  BG_line_ofs#[MEM[#LY]+21,2] = line_ofs_table_y#[255-MEM[#SCY]]
+
+'5x
+'  BG_line_ofs#[MEM[#LY],0] = line_ofs_table_x#[MEM[#SCX]]
+'  BG_line_ofs#[MEM[#LY],2] = line_ofs_table_y#[255-MEM[#SCY]]
+
+
+'  win_line_ofs#[MEM[#LY]+18,0] = line_ofs_table_x#[MEM[#WX]]
+'  win_line_ofs#[MEM[#LY]+18,2] = line_ofs_table_y#[MEM[#WY]]
+
+  GOTO @PPU_end
+
+@PPU_mode_VRAM:
+  PPU_mode = #PPU_mode_hblank
+  IF ((MEM[#STAT]>>>3)AND 1) THEN
+    MEM[#IF] = MEM[#IF] OR &B00010
+  ENDIF
+  GOTO @PPU_end
+
+@PPU_mode_hblank:
+  ' Go to next line
+  IF MEM[#LY] < 143 THEN
+    PPU_mode = #PPU_mode_OAM
+    IF ((MEM[#STAT]>>>5)AND 1) THEN
+      MEM[#IF] = MEM[#IF] OR &B00010
+    ENDIF
+
+  ' Entering VBLANK
+  ELSE
+    PPU_mode = #PPU_mode_vblank
+    MEM[#IF] = MEM[#IF] OR &B00001
+
+    IF ((MEM[#STAT]>>>4)AND 1) THEN
+      MEM[#IF] = MEM[#IF] OR &B00010
+    ENDIF
+
+  ENDIF
+  MEM[#LY]=MEM[#LY]+1 'inc lineNo
+
+  IF (MEM[#STAT]>>>6)AND 1 THEN
+    IF MEM[#LY]==MEM[#LYC] THEN
+      MEM[#IF] = MEM[#IF] OR &B00010
+      MEM[#STAT] = MEM[#STAT]OR&B100
+    ENDIF
+  ENDIF
+  GOTO @PPU_end
+
+@PPU_mode_vblank:
+  IF MEM[#LY] >= 153 THEN
+    PPU_mode = #PPU_mode_OAM
+
+    IF ((MEM[#STAT]>>>5)AND 1) THEN
+      MEM[#IF] = MEM[#IF] OR &B00010
+    ENDIF
+
+    MEM[#LY] = 0
+    tmp=#FRAM/PERFEND(0)
+    IF tmp>=60 THEN tmp=60:VSYNC
+
+    LOCATE 0,0:?FORMAT$("FPS: %D  ",tmp);
+
+    PERFBEGIN 0,#C_FUCHSIA
+    IF VRAM_tileupdate THEN
+      GUPDATE 4
+      VRAM_tileupdate=0
+    ENDIF
+    IF VRAM_put0 THEN
+      TUPDATE #bg_screen
+      VRAM_put0=0
+    ENDIF
+    IF VRAM_put1 THEN
+      TUPDATE #win_screen
+      VRAM_put1=0
+    ENDIF
+    LFILTER #bg_layer,3,BG_line_ofs#,1
+'    LFILTER #win_layer,3,win_line_ofs#,1
+
+  ELSE
+    MEM[#LY]=MEM[#LY]+1 'inc lineNo
+  ENDIF
+
+  IF (MEM[#STAT]>>>6)AND 1 THEN
+    IF MEM[#LY]==MEM[#LYC] THEN
+      MEM[#IF] = MEM[#IF] OR &B00010
+      MEM[#STAT] = MEM[#STAT]OR&B100
+    ENDIF
+  ENDIF
+
+@PPU_end:
+  MEM[#STAT] = (MEM[#STAT]AND &HFC)OR PPU_mode
+  ENDLOOP
+
+  RETURN
+
+
+
+@APU_tick
+  'If trigger bit is set...
+
+  'Stop after lenght passed
+'  IF ti1 < l1# THEN
+  IF ti1 < lP1# THEN
+    ti1 = ti1 + 1
+  ELSEIF le1 THEN
+    BGMSTOP 0
+  ENDIF
+
+'  IF ti2 < l2# THEN
+  IF ti2 < lP2# THEN
+    ti2 = ti2 + 1
+  ELSEIF le2 THEN
+    BGMSTOP 1
+  ENDIF
+
+'  IF ti3 < l3# THEN
+  IF ti3 < lP3# THEN
+    ti3 = ti3 + 1
+  ELSEIF le3 THEN
+    BGMSTOP 2
+  ENDIF
+
+'  IF ti4 < l4# THEN
+  IF ti4 < lP4# THEN
+    ti4 = ti4 + 1
+  ELSEIF le4 THEN
+    BGMSTOP 3
+  ENDIF
+
+  IF t1 THEN
+    'To prevent popping artifacts:
+    BGMSTOP 0
+
+    'Length
+    BGMVAR 0,2,60
+
+    'Envelope
+    BGMVAR 0,3,fi1#
+
+    'Initial vol L|R
+    BGMVAR 0,5,v1l*vl#*fv1#
+    BGMVAR 0,6,v1r*vr#*fv1#
+
+    'Final vol L|R
+    BGMVAR 0,0,v1l*vl#*dir1#
+    BGMVAR 0,1,v1r*vr#*dir1#
+
+    'Trigger note playback:
+    BGMPLAY 0,128,4*apu_pwr
+
+    t1=0':l1#=lP1#
+    ti1=0
+  ELSE
+    BGMVOL 0,4*apu_pwr
+  ENDIF
+
+  'Set frequency
+  BGMPITCH 0,pitches#[f1]
+
+
+  'If trigger bit is set...
+  IF t2 THEN
+    'To prevent popping artifacts:
+    BGMSTOP 1
+
+    'Length
+    BGMVAR 1,2,60
+
+    'Envelope
+    BGMVAR 1,3,fi2#
+
+    'Initial vol L|R
+    BGMVAR 1,5,v2l*vl#*fv2#
+    BGMVAR 1,6,v2r*vr#*fv2#
+
+    'Final vol L|R
+    BGMVAR 1,0,v2l*vl#*dir2#
+    BGMVAR 1,1,v2r*vr#*dir2#
+
+    'Trigger note playback:
+    BGMPLAY 1,129,4*apu_pwr
+
+    t2=0':l2#=lP2#
+    ti2=0
+  ELSE
+    BGMVOL 1,4*apu_pwr
+  ENDIF
+
+  'Set frequency
+  BGMPITCH 1,pitches#[f2]
+
+
+  'If trigger bit is set...
+  IF t3 THEN
+    'To prevent popping artifacts:
+    BGMSTOP 2
+
+    'Length
+    BGMVAR 2,2,60
+
+    'Vol L|R
+    BGMVAR 2,0,v3l*vl#
+    BGMVAR 2,1,v3r*vr#
+
+    'Trigger note playback:
+    BGMPLAY 2,130,von3*apu_pwr*v3
+
+    t3=0':l3#=lP3#
+    ti3=0
+  ELSE
+    BGMVOL 2,von3*apu_pwr*v3
+  ENDIF
+
+  'Set frequency
+  BGMPITCH 2,pitches#[f3]
+
+  'If trigger bit is set...
+  IF t4 THEN
+    'To prevent popping artifacts:
+    BGMSTOP 3
+
+    'Length
+    BGMVAR 3,2,60
+
+    'Envelope
+    BGMVAR 3,3,fi4#
+
+    'Initial vol L|R
+    BGMVAR 3,5,v4l*vl#*fv4#
+    BGMVAR 3,6,v4r*vr#*fv4#
+
+    'Final vol L|R
+    BGMVAR 3,0,v4l*vl#*dir4#
+    BGMVAR 3,1,v4r*vr#*dir4#
+
+    'Trigger note playback:
+    BGMPLAY 3,131,8*apu_pwr
+
+    t4=0':l4#=lP4#
+    ti4=0
+  ELSE
+    BGMVOL 3,8*apu_pwr
+  ENDIF
+RETURN
+END
+
+
+
+
+DEF DMG_reset
+  DMG_A=255:  DMG_F=255
+  DMG_B=255:  DMG_C=255
+  DMG_D=255:  DMG_E=255
+  DMG_H=255:  DMG_L=255
+
+  DMG_PC = 0 : 
+  DMG_SP = &HFFFF
+
+  DMG_INTF  = 0
+
+  DMG_state0 = 0
+
+  DMG_HALT       = #FALSE
+END
+
+
+
+DEF M_RLC(reg)
+  DMG_F = reg>>>7
+  reg = ((reg<<1) OR DMG_F) AND 255
+  DMG_F = (DMG_F<<4) OR Z_table[reg]
+  RETURN reg
+END
+
+
+DEF M_RL(reg)
+  IF reg AND &H80 THEN
+    reg = ((reg<<1) OR ((DMG_F AND&H10)>>>4))AND 255
+    DMG_F = Z_table[reg] OR &H10
+  ELSE
+    reg = ((reg<<1) OR ((DMG_F AND&H10)>>>4))AND 255
+    DMG_F = Z_table[reg]
+  ENDIF
+  RETURN reg
+END
+
+
+DEF M_RRC(reg)
+  DMG_F = reg AND 1
+  reg = (reg>>>1) OR (DMG_F<<7)
+  DMG_F = (DMG_F<<4) OR Z_table[reg]
+  RETURN reg
+END
+
+DEF M_RR(reg)
+  IF (reg AND 1) THEN
+    reg = ((reg>>>1) OR ((DMG_F AND&H10)<<3)) AND 255
+    DMG_F = Z_table[reg] OR &H10
+  ELSE
+    reg = ((reg>>>1) OR ((DMG_F AND&H10)<<3)) AND 255
+    DMG_F = Z_table[reg]
+  ENDIF
+  RETURN reg
+END
+
+
+DEF M_SLA(reg)
+  DMG_F = reg>>>7
+  reg = (reg<<1) AND 255
+  DMG_F = (DMG_F<<4) OR Z_table[reg]
+  RETURN reg
+END
+
+DEF M_SRA(reg)
+  DMG_F = reg AND 1
+  reg = (reg>>>1) OR (reg AND &H80)
+  DMG_F = (DMG_F<<4) OR Z_table[reg]
+  RETURN reg
+END
+
+DEF M_SLL(reg)
+  DMG_F = (reg>>>7)
+  reg = ((reg<<1) OR 1) AND 255
+  DMG_F = (DMG_F<<4) OR Z_table[reg]
+  RETURN reg
+END
+
+DEF M_SRL(reg)
+  DMG_F = reg AND 1
+  reg = reg >>> 1
+  DMG_F = (DMG_F<<4) OR Z_table[reg]
+  RETURN reg
+END
+
+DEF M_SWAP(reg)
+  reg = ((reg AND &H0F)<<4)+(reg>>>4)
+  DMG_F=Z_table[reg]
+  RETURN reg
+END
+
+
+
+DEF M_LDWORD()
+  tmp = (MEM[DMG_PC+1]<<8) + MEM[DMG_PC]
+  DMG_PC=DMG_PC+2
+  RETURN tmp
+END
+
+
+
+DEF M_INC(reg)
+  reg = (reg + 1) AND 255
+  DMG_F = INC_table[reg] OR (DMG_F AND &H10)
+  RETURN reg
+END
+
+
+DEF M_DEC(reg)
+  reg = (reg - 1) AND 255
+  DMG_F = DEC_table[reg] OR (DMG_F AND &H10)
+  RETURN reg
+END
+
+
+DEF M_ADDW(reg1,reg2)'TODO optimize
+reg1h = reg1>>>8
+reg2h = reg2>>>8
+reg1l = reg1 AND &HFF
+reg2l = reg2 AND &HFF
+    
+'@ADD_*_*:
+  J0=ADD_table[(reg1l<<8)+reg2l]
+  DMG_F=(DMG_F AND &H80) OR (J0 AND &H7F)
+  tmp=DMG_F AND &H80
+  J0=J0>>>8
+    
+'@ADC_*_*:
+  IF DMG_F AND &H10 THEN
+    J1=ADC_table[(reg1h<<8)+reg2h]
+    DMG_F=tmp OR (J1 AND &H7F)
+    J1=J1>>>8
+  ELSE
+    J1=ADD_table[(reg1h<<8)+reg2h]
+    DMG_F=tmp OR (J1 AND &H7F)
+    J1=J1>>>8
+  ENDIF
+  
+  RETURN (J1<<8)+J0
+END
+
+
+
+
+'********
+'* Menu *
+'********
+@USER_BREAK
+  ON BREAK GOTO @USER_BREAK
+  SNDSTOP
+  SAVEV "DAT:"+romfile$+".SAV",ERAM
+@break_start
+  DIALOG "Save the state before exiting?",1,"Exit",30
+  IF RESULT()==-1 THEN
+    DIALOG "Not saving. Are you sure?",3,"Exit"
+    IF RESULT()==1 THEN
+      END
+    ELSE
+      GOTO @break_start
+    ENDIF
+  ELSE
+    save_state
+  ENDIF
+
+
+@USER_BREAK2
+'  SNDSTOP
+  BGMPAUSE
+
+
+@MENU
+  ON BREAK GOTO @RESUME
+  BGMPAUSE
+  MENU
+
+@RESUME
+  CLS 3
+  CLS:RESUME
+
+DEF MENU
+  VAR logoLines
+  VAR menuItems,cursor,key$
+
+  'Make sure the keyboard buffer is empty
+  WHILE INKEY$()!="":WEND
+
+  RESTORE "@LOGO_"+lang$
+  READ logoLines
+  DIM lineX[logoLines],lineY[logoLines],lineCol[logoLines],lineText$[logoLines]
+
+  FOR i=0 TO logoLines-1
+    READ lineX[i],lineY[i],lineCol[i],lineText$[i]
+  NEXT
+
+  RESTORE "@MENU_ITEMS_"+lang$
+  READ menuItems
+  DIM itemX[menuItems],itemY[menuItems],itemCol[menuItems],itemName$[menuItems],itemLabel$[menuItems]
+
+  FOR i=0 TO menuItems-1
+    READ itemX[i],itemY[i],itemCol[i],itemName$[i],itemLabel$[i]
+  NEXT
+
+  CLS
+  SPSHOW 102
+  LFILTER 1,2,256
+
+  @LOOP
+  LOOP
+    
+    FOR i=0 TO logoLines-1
+      LOCATE 3,lineX[i]+1,lineY[i]+1
+      COLOR 3,#C_NAVY
+      TPRINT 3,lineText$[i];
+
+      LOCATE 3,lineX[i],lineY[i]
+      COLOR 3,#C_NAVY
+      TPRINT 3,lineText$[i];
+
+      LOCATE lineX[i]+1,lineY[i]+1
+      COLOR #C_NAVY AND &H7FFFFFFF
+      ?lineText$[i];
+
+      LOCATE lineX[i],lineY[i]
+      COLOR lineCol[i]
+      ?lineText$[i];
+    NEXT
+
+    FOR i=0 TO menuItems-1
+      LOCATE 3,itemX[i]+1,itemY[i]+1
+      COLOR 3,#C_NAVY
+      TPRINT 3,itemName$[i];
+
+      LOCATE 3,itemX[i],itemY[i]
+      COLOR 3,#C_NAVY
+      TPRINT 3,itemName$[i];
+
+      LOCATE itemX[i]+1,itemY[i]+1
+      COLOR #C_NAVY AND &H7FFFFFFF
+      ?itemName$[i];
+
+      LOCATE itemX[i]-2,itemY[i]
+      ?" ";
+
+      LOCATE itemX[i],itemY[i]
+      COLOR itemCol[i]
+      ?itemName$[i];
+    NEXT
+
+    key$ = INKEY$()
+
+    'A
+    IF     key$==CHR$(&H0D)GOTO itemLabel$[cursor]
+
+    'UP
+    IF     key$==CHR$(&H1E)THEN
+      DEC cursor
+
+    'DOWN
+    ELSEIF key$==CHR$(&H1F)THEN
+      INC cursor
+
+    ENDIF
+
+    IF cursor<0 THEN cursor=menuItems-1
+    cursor=cursor MOD menuItems
+
+    COLOR &HFFFFFF3F:LOCATE itemX[cursor]-2,itemY[cursor]
+    ?"";
+
+    VSYNC
+  ENDLOOP
+
+@ROM
+  IF!WARN()GOTO@RESUME
+  EXEC #_SLOT
+
+@LSAV
+  IF!WARN()GOTO@RESUME
+  LSAV
+  GOTO@HRESET
+
+@SSAV
+  SSAV
+  GOTO@RESUME
+
+
+@SAVE
+  SAVE_STATE
+  GOTO@RESUME
+
+@LOAD
+  LOAD_STATE
+  GOTO@RESUME
+
+@SRESET
+  DMG_PC = 256
+  GOTO@RESUME
+
+@HRESET
+  DMG_reset
+  reload_bootrom
+  DMG_PC=0
+
+@RESUME
+  CLS 3
+  CLS
+  RESUME
+
+@END
+  IF!WARN()GOTO@RESUME
+  SNDSTOP
+  ACLS
+  COLOR #C_WHITE
+  STOP "Good bye :D"
+
+END
+
+DEF WARN()
+  tmp=DIALOG("WARNING!"+CHR$(13)+"There might be unsaved data. Do you wish to save before continueing?"+CHR$(13)+CHR$(13)+"  Save SAV"+CHR$(13)+"  Cancel"+CHR$(13)+"  Continue without saving",&B1011,"Unsaved data")
+  IF     tmp AND (1<<#B_A) THEN
+    SSAV
+    RETURN 1
+  ELSEIF tmp AND (1<<#B_B) THEN
+    RETURN 0
+  ELSEIF tmp AND (1<<#B_X) THEN
+    RETURN 1
+  ELSE
+    RETURN 0
+  ENDIF
+END
+
+
+COMMON DEF RESUME
+  ON BREAK GOTO @MENU
+  COLOR #C_YELLOW
+  VAR ret
+  SPHIDE 102
+  LFILTER 1,0
+  BGMCONT
+
+  DMG_emu -1
+
+END
+
+
+
+
+@LOGO_EN
+'    # Total lines
+DATA 7
+'     X, Y,RGB COLOR,  TEXT
+DATA 20, 5,&HFF3F3FFF,""
+DATA 20, 6,&HFFFF3F3F,"  "
+DATA 20, 7,&HFFFFFF3F,"         "
+DATA 20, 8,&HFF3FFF3F,"         "
+DATA 20, 9,&HFF3FFFFF,"  "
+DATA 20,10,&HFF3F3FFF,""
+DATA 20,11,&HFFFF1FFF,"GameBoy emulator for SmileBASIC 4"
+
+@MENU_ITEMS_EN
+'    # Total menu items
+DATA 9
+'     X, Y,RGB COLOR,  NAME,           @LABEL FUNC
+DATA 24,16,&HFF3FFFFF,"Resume game",  "@RESUME"
+
+DATA 24,19,&HFF3FFFFF,"Load state",   "@LOAD"
+DATA 24,21,&HFF3FFFFF,"Save state",   "@SAVE"
+
+DATA 24,24,&HFF3FFF3F,"Load ROM",     "@ROM"
+
+DATA 24,28,&HFF3FFF3F,"Load SAV",     "@LSAV"
+DATA 24,30,&HFF3FFF3F,"Save SAV",     "@SSAV"
+
+DATA 24,33,&HFFFFFF3F,"Soft reset",   "@SRESET"
+DATA 24,35,&HFFFF7F1F,"Hard reset",   "@HRESET"
+
+DATA 24,38,&HFFFF1F3F,"Exit SmileBOY","@END"
+
+
+'Japanese - thanks to ku6dra
+@LOGO_JA
+DATA 8
+
+DATA 20, 5,&HFF3F3FFF,""
+DATA 20, 6,&HFFFF3F3F,"  "
+DATA 20, 7,&HFFFFFF3F,"         "
+DATA 20, 8,&HFF3FFF3F,"         "
+DATA 20, 9,&HFF3FFFFF,"    "
+DATA 20,10,&HFF3F9FFF,"「スマイルボーイ」                  "
+DATA 20,11,&HFF3F3FFF,""
+'DATA 20,12,&HFFFF1FFF,"プチコン4用ゲームボーイエミュレータ"
+DATA 20,12,&HFFFF1FFF,"ゲームボーイエミュレータ for プチコン4"
+
+@MENU_ITEMS_JA
+DATA 9
+
+DATA 24,17,&HFF3FFFFF,"ゲームに戻る",  "@RESUME"
+
+DATA 24,20,&HFF3FFFFF,"ステートロード",   "@LOAD"
+DATA 24,22,&HFF3FFFFF,"ステートセーブ",   "@SAVE"
+
+DATA 24,25,&HFF3FFF3F,"ROMファイルの読み込み",     "@ROM"
+
+DATA 24,29,&HFF3FFF3F,"SAVファイルの読み込み",     "@LSAV"
+DATA 24,31,&HFF3FFF3F,"Save SAV",     "@SSAV"
+
+DATA 24,34,&HFFFFFF3F,"ソフトリセット",   "@SRESET"
+DATA 24,36,&HFFFF7F1F,"ハードリセット",   "@HRESET"
+
+DATA 24,39,&HFFFF1F3F,"SmileBOYを終了する","@END"
+
+
+'German - thanks to CyberYoshi
+@LOGO_DE
+'    # Total lines
+DATA 7
+'     X, Y,RGB COLOR,  TEXT
+DATA 20, 5,&HFF3F3FFF,""
+DATA 20, 6,&HFFFF3F3F,"  "
+DATA 20, 7,&HFFFFFF3F,"         "
+DATA 20, 8,&HFF3FFF3F,"         "
+DATA 20, 9,&HFF3FFFFF,"  "
+DATA 20,10,&HFF3F3FFF,""
+DATA 20,11,&HFFFF1FFF,"GameBoy-Emulator für SmileBASIC 4"
+
+@MENU_ITEMS_DE
+'    # Total menu items
+DATA 9
+'     X, Y,RGB COLOR,  NAME,           @LABEL FUNC
+DATA 24,16,&HFF3FFFFF,"Spiel fortfahren",  "@RESUME"
+
+DATA 24,19,&HFF3FFFFF,"Spielstand laden",   "@LOAD"
+DATA 24,21,&HFF3FFFFF,"Spielstand speichern",   "@SAVE"
+
+DATA 24,24,&HFF3FFF3F,"ROM laden",     "@ROM"
+
+DATA 24,28,&HFF3FFF3F,"SAV laden",     "@LSAV"
+DATA 24,30,&HFF3FFF3F,"Save SAV",     "@SSAV"
+
+DATA 24,33,&HFFFFFF3F,"Soft-Reset",   "@SRESET"
+DATA 24,35,&HFFFF7F1F,"Hard-Reset",   "@HRESET"
+
+DATA 24,38,&HFFFF1F3F,"SmileBOY beenden","@END"
+
+
+@LOGO_NL
+DATA 7
+
+DATA 20, 5,&HFF3F3FFF,""
+DATA 20, 6,&HFFFF3F3F,"  "
+DATA 20, 7,&HFFFFFF3F,"         "
+DATA 20, 8,&HFF3FFF3F,"         "
+DATA 20, 9,&HFF3FFFFF,"  "
+DATA 20,10,&HFF3F3FFF,""
+DATA 20,11,&HFFFF1FFF,"GameBoy-emulator voor SmileBASIC 4"
+
+@MENU_ITEMS_NL
+DATA 9
+
+DATA 24,16,&HFF3FFFFF,"Doorgaan","@RESUME"
+
+DATA 24,19,&HFF3FFFFF,"Spelstand laden","@LOAD"
+DATA 24,21,&HFF3FFFFF,"Spelstand opslaan","@SAVE"
+
+DATA 24,24,&HFF3FFF3F,"ROM laden","@ROM"
+
+DATA 24,28,&HFF3FFF3F,"SAV laden","@LSAV"
+DATA 24,30,&HFF3FFF3F,"Save SAV",     "@SSAV"
+
+DATA 24,33,&HFFFFFF3F,"Soft-reset","@SRESET"
+DATA 24,35,&HFFFF7F1F,"Hard-reset","@HRESET"
+
+DATA 24,38,&HFFFF1F3F,"SmileBOY beëindigen","@END"
+
+'Finnish - thanks to Perska
+@LOGO_SU
+'    # Total lines
+DATA 7
+'     X, Y,RGB COLOR,  TEXT
+DATA 20, 5,&HFF3F3FFF,""
+DATA 20, 6,&HFFFF3F3F,"  "
+DATA 20, 7,&HFFFFFF3F,"         "
+DATA 20, 8,&HFF3FFF3F,"         "
+DATA 20, 9,&HFF3FFFFF,"  "
+DATA 20,10,&HFF3F3FFF,""
+DATA 20,11,&HFFFF1FFF,"GameBoy emulaattori SmileBASIC 4:lle"
+
+@MENU_ITEMS_SU
+'    # Total menu items
+DATA 9
+'     X, Y,RGB COLOR,  NAME,           @LABEL FUNC
+DATA 24,16,&HFF3FFFFF,"Jatka peliä",  "@RESUME"
+
+DATA 24,19,&HFF3FFFFF,"Avaa tila",   "@LOAD"
+DATA 24,21,&HFF3FFFFF,"Tallenna tila",   "@SAVE"
+
+DATA 24,24,&HFF3FFF3F,"Avaa ROM",     "@ROM"
+
+DATA 24,28,&HFF3FFF3F,"Tallenna SAV",     "@LSAV"
+DATA 24,30,&HFF3FFF3F,"Save SAV",     "@SSAV"
+
+DATA 24,33,&HFFFFFF3F,"Ohjelman nollaus",   "@SRESET"
+DATA 24,35,&HFFFF7F1F,"Laitteen nollaus",   "@HRESET"
+
+DATA 24,38,&HFFFF1F3F,"Lopeta SmileBOY","@END"
+
+'Esperanto - thanks to Fußmatte
+@LOGO_ESP
+'    # Total lines
+DATA 7
+'     X, Y,RGB COLOR,  TEXT
+DATA 20, 5,&HFF3F3FFF,""
+DATA 20, 6,&HFFFF3F3F,"  "
+DATA 20, 7,&HFFFFFF3F,"         "
+DATA 20, 8,&HFF3FFF3F,"         "
+DATA 20, 9,&HFF3FFFFF,"  "
+DATA 20,10,&HFF3F3FFF,""
+DATA 20,11,&HFFFF1FFF,"Imitilo de Game Boy por SmileBASIC 4"
+
+@MENU_ITEMS_ESP
+'    # Total menu items
+DATA 9
+'     X, Y,RGB COLOR,  NAME,           @LABEL FUNC
+DATA 24,16,&HFF3FFFFF,"Daŭri ludon",  "@RESUME"
+
+DATA 24,19,&HFF3FFFFF,"Ŝargi staton",   "@LOAD"
+DATA 24,21,&HFF3FFFFF,"Konservi staton",   "@SAVE"
+
+DATA 24,24,&HFF3FFF3F,"Ŝargi ROM-on",     "@ROM"
+
+DATA 24,28,&HFF3FFF3F,"Ŝargi SAV-on",     "@SAV"
+DATA 24,30,&HFF3FFF3F,"Save SAV",     "@SSAV"
+
+DATA 24,33,&HFFFFFF3F,"Parta relanĉo",   "@SRESET"
+DATA 24,35,&HFFFF7F1F,"Malvarma relanĉo",   "@HRESET"
+
+DATA 24,38,&HFFFF1F3F,"Eliri de SmileBOY","@END"
+
+
+
